@@ -132,6 +132,10 @@ public:
     // parameter var table
     static const struct AP_Param::GroupInfo var_info[];
 
+    // Returns true if we have a recent yaw for the target
+    bool get_target_yaw_rad(float &yaw_rad) const;
+    uint32_t target_yaw_age_ms() const;
+
 private:
     enum class EstimatorType : uint8_t {
         RAW_SENSOR = 0,
@@ -253,6 +257,9 @@ private:
     // backend state
     struct precland_state {
         bool    healthy;
+        bool     target_yaw_valid;      // true if we have a recent yaw from LANDING_TARGET.q
+        float    target_yaw_rad;        // desired yaw of vehicle in radians (NED frame)
+        uint32_t target_yaw_time_ms;    // AP_HAL::millis() when yaw was last updated
     } _backend_state;
     AC_PrecLand_Backend         *_backend;  // pointers to backend precision landing driver
 

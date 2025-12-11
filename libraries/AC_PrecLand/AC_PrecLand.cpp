@@ -220,6 +220,9 @@ void AC_PrecLand::init(uint16_t update_rate_hz)
     // default health to false
     _backend = nullptr;
     _backend_state.healthy = false;
+	_backend_state.target_yaw_rad    = 0.0f;
+	_backend_state.target_yaw_time_ms = 0;
+	_backend_state.target_yaw_valid  = false;
 
     // create inertial history buffer
     // constrain lag parameter to be within bounds
@@ -637,7 +640,7 @@ bool AC_PrecLand::retrieve_los_meas(Vector3f& target_vec_unit, VectorFrame& fram
             // if it is some other orientation, we first bring the vector to forward
             // and then we rotate it to desired orientation
             // because the rotations are measured with respect to a vector pointing towards front in body frame
-            // for eg, if orientation is back, i.e., ROTATION_YAW_180, 
+            // for eg, if orientation is back, i.e., ROTATION_YAW_180,
             // the vector is first brought to front and then rotation by YAW 180 to take it to the back of vehicle
             target_vec_unit.rotate(ROTATION_PITCH_90); // bring vector to front
             target_vec_unit.rotate(_orient);           // rotate it to desired orientation
@@ -809,6 +812,35 @@ bool AC_PrecLand::get_target_velocity(Vector2f& target_vel)
     target_vel = (target_vel_rel_ne_ms) + _last_veh_velocity_NED_ms.xy();
     return true;
 }
+
+bool AC_PrecLand::get_target_yaw_rad(float &yaw_rad) const
+{
+    if (!_backend_state.target_yaw_valid) {
+        return false;
+    }
+
+    const uint32_t now_ms = AP_HAL::millis();
+    const uint32_t age_ms = now_ms - _backend_state.target_yaw_time_ms;
+    const uint32_t YAW_TIMEOUT_MS = 1000U; // 1 second
+
+    if (age_ms > YAW_TIMEOUT_MS) {
+        return false;
+    }
+
+    yaw_rad = _backend_state.target_yaw_rad;
+    return true;
+}
+
+
+uint32_t AC_PrecLand::target_yaw_age_ms() const
+{
+    if (!_backend_state.target_yaw_valid) {
+        return UINT32_MAX;
+    }
+    const uint32_t now = AP_HAL::millis();
+    return now - _backend_state.target_yaw_time_ms;
+}
+
 
 #if HAL_LOGGING_ENABLED
 // Write a precision landing entry

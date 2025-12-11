@@ -90,7 +90,9 @@ void ModeLoiter::run()
     update_simple_mode();
 
     // convert pilot input to lean angles
-    get_pilot_desired_lean_angles_rad(target_roll_rad, target_pitch_rad, loiter_nav->get_angle_max_rad(), attitude_control->get_althold_lean_angle_max_rad());
+    get_pilot_desired_lean_angles_rad(target_roll_rad, target_pitch_rad,
+                                      loiter_nav->get_angle_max_rad(),
+                                      attitude_control->get_althold_lean_angle_max_rad());
 
     // process pilot's roll and pitch input
     loiter_nav->set_pilot_desired_acceleration_rad(target_roll_rad, target_pitch_rad);
@@ -98,9 +100,68 @@ void ModeLoiter::run()
     // get pilot's desired yaw rate
     target_yaw_rate_rads = get_pilot_desired_yaw_rate_rads();
 
+#if AC_PRECLAND_ENABLED
+    // yaw-following of precision-landing target
+    // Only apply when precision loiter is enabled and precland is enabled.
+    static uint32_t last_plnd_yaw_dbg_ms = 0;
+
+    if (_precision_loiter_enabled && copter.precland.enabled()) {
+        uint32_t now_ms = AP_HAL::millis();
+
+        if (!copter.precland.target_acquired()) {
+            // We thought PLND was active but target isn't actually acquired
+            if (now_ms - last_plnd_yaw_dbg_ms > 1000) {
+                GCS_SEND_TEXT(MAV_SEVERITY_INFO, "Loiter PLND yaw: target NOT acquired");
+                last_plnd_yaw_dbg_ms = now_ms;
+            }
+        } else {
+            float target_yaw_rad;
+            const bool have_yaw = copter.precland.get_target_yaw_rad(target_yaw_rad);
+
+            if (!have_yaw) {
+                // PLND has a target, but no valid yaw coming through
+                if (now_ms - last_plnd_yaw_dbg_ms > 1000) {
+                    GCS_SEND_TEXT(MAV_SEVERITY_INFO, "Loiter PLND yaw: no valid target yaw");
+                    last_plnd_yaw_dbg_ms = now_ms;
+                }
+            } else {
+                // current vehicle yaw in earth frame (radians)
+                const float curr_yaw_rad = ahrs.get_yaw_rad();
+                const float yaw_err = wrap_PI(target_yaw_rad - curr_yaw_rad);
+
+                // P-controller from yaw error -> yaw rate (rad/s)
+                const float k_yaw = 2.0f;   // tune later / param
+                float yaw_rate_cmd = k_yaw * yaw_err;
+
+                // --- TEMP: use a fixed yaw-rate limit... we should use the actual yaw rate limits ---
+                // e.g. 60 deg/s => ~1.047 rad/s
+                const float yaw_rate_max = radians(60.0f);
+                yaw_rate_cmd = constrain_float(yaw_rate_cmd, -yaw_rate_max, yaw_rate_max);
+
+                // Combine pilot yaw stick + PLND yaw tracking
+                target_yaw_rate_rads += yaw_rate_cmd;
+
+                // debug
+                if (now_ms - last_plnd_yaw_dbg_ms > 500) {
+                    GCS_SEND_TEXT(MAV_SEVERITY_INFO,
+                                  "PLND yaw: tgt=%.1f curr=%.1f err=%.1f cmd=%.1f (max=%.1f)",
+                                  degrees(target_yaw_rad),
+                                  degrees(curr_yaw_rad),
+                                  degrees(yaw_err),
+                                  degrees(yaw_rate_cmd),
+                                  degrees(yaw_rate_max));
+                    last_plnd_yaw_dbg_ms = now_ms;
+                }
+            }
+        }
+    }
+#endif // AC_PRECLAND_ENABLED
+
     // get pilot desired climb rate
     target_climb_rate_ms = get_pilot_desired_climb_rate_ms();
-    target_climb_rate_ms = constrain_float(target_climb_rate_ms, -get_pilot_speed_dn_ms(), get_pilot_speed_up_ms());
+    target_climb_rate_ms = constrain_float(target_climb_rate_ms,
+                                           -get_pilot_speed_dn_ms(),
+                                           get_pilot_speed_up_ms());
 
     // relax loiter target if we might be landed
     if (copter.ap.land_complete_maybe) {
@@ -170,7 +231,6 @@ void ModeLoiter::run()
         loiter_nav->update();
 #endif
 
-
         // get avoidance adjusted climb rate
         target_climb_rate_ms = get_avoidance_adjusted_climbrate_ms(target_climb_rate_ms);
 
@@ -185,10 +245,15 @@ void ModeLoiter::run()
     }
 
     // call attitude controller
-    attitude_control->input_thrust_vector_rate_heading_rads(loiter_nav->get_thrust_vector(), target_yaw_rate_rads, false);
+    attitude_control->input_thrust_vector_rate_heading_rads(
+        loiter_nav->get_thrust_vector(),
+        target_yaw_rate_rads,
+        false);
+
     // run the vertical position controller and set output throttle
     pos_control->update_U_controller();
 }
+
 
 float ModeLoiter::wp_distance_m() const
 {

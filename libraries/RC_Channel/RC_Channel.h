@@ -369,6 +369,8 @@ public:
         AUTOLAND =           183,  //Fixed Wing AUTOLAND Mode
         SYSTEMID =           184,  // system ID as an aux switch
         MOUNT_RP_LOCK =      185,  // mount lock modes for roll and pitch axes, for all mounts that support it
+        WINGMAN_RETURN =     186,  // Wingman: collapse offset and return over target
+
 
         // inputs from 200 will eventually used to replace RCMAP
         ROLL =               201, // roll input

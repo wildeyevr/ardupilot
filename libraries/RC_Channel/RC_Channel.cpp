@@ -251,6 +251,7 @@ const AP_Param::GroupInfo RC_Channel::var_info[] = {
     // @Values{Plane}: 183: AUTOLAND mode
     // @Values{Plane}: 184: System ID Chirp
     // @Values{Copter, Rover, Plane, Blimp, Sub}:  185:Mount Roll/Pitch Lock
+    // @Values{Copter}: 186:WingmanReturn
     // @Values{Rover}: 201:Roll
     // @Values{Rover}: 202:Pitch
     // @Values{Rover}: 207:MainSail
@@ -754,7 +755,8 @@ void RC_Channel::init_aux_function(const AUX_FUNC ch_option, const AuxSwitchPos 
 #if HAL_GENERATOR_ENABLED
     case AUX_FUNC::LOWEHEISER_THROTTLE:
 #endif
-        break;
+    case AUX_FUNC::WINGMAN_RETURN:
+    break;
 
     // these functions require explicit initialization
 #if HAL_ADSB_ENABLED
@@ -930,6 +932,9 @@ const RC_Channel::LookupTable RC_Channel::lookuptable[] = {
 #if HAL_MOUNT_ENABLED
     { AUX_FUNC::MOUNT_LRF_ENABLE, "Mount LRF Enable"},
 #endif
+
+{ AUX_FUNC::WINGMAN_RETURN,  "WingmanReturn" },
+
 };
 
 /* lookup the announcement for switch change */
@@ -1960,14 +1965,20 @@ bool RC_Channel::do_aux_function(const AuxFuncTrigger &trigger)
         break;
 
 #if HAL_GENERATOR_ENABLED
-    case AUX_FUNC::LOWEHEISER_THROTTLE:
-    case AUX_FUNC::LOWEHEISER_STARTER:
-        // monitored by the library itself
-        break;
+        case AUX_FUNC::LOWEHEISER_THROTTLE:
+        case AUX_FUNC::LOWEHEISER_STARTER:
+            // monitored by the library itself
+            break;
 #endif
 
-    default:
-        GCS_SEND_TEXT(MAV_SEVERITY_INFO, "Invalid channel option (%u)", (unsigned int)ch_option);
+        case AUX_FUNC::WINGMAN_RETURN:
+            // No direct action here: Wingman mode reads this via
+                // rc().find_channel_for_option(AUX_FUNC::WINGMAN_RETURN)
+                    // and handles behavior internally.
+                        break;
+
+        default:
+            GCS_SEND_TEXT(MAV_SEVERITY_INFO, "Invalid channel option (%u)", (unsigned int)ch_option);
         return false;
     }
 

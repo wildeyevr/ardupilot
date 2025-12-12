@@ -142,16 +142,16 @@ void ModeLoiter::run()
                 target_yaw_rate_rads += yaw_rate_cmd;
 
                 // debug
-                if (now_ms - last_plnd_yaw_dbg_ms > 500) {
-                    GCS_SEND_TEXT(MAV_SEVERITY_INFO,
-                                  "PLND yaw: tgt=%.1f curr=%.1f err=%.1f cmd=%.1f (max=%.1f)",
-                                  degrees(target_yaw_rad),
-                                  degrees(curr_yaw_rad),
-                                  degrees(yaw_err),
-                                  degrees(yaw_rate_cmd),
-                                  degrees(yaw_rate_max));
-                    last_plnd_yaw_dbg_ms = now_ms;
-                }
+                //if (now_ms - last_plnd_yaw_dbg_ms > 500) {
+                   // GCS_SEND_TEXT(MAV_SEVERITY_INFO,
+                                //  "PLND yaw: tgt=%.1f curr=%.1f err=%.1f cmd=%.1f (max=%.1f)",
+                                //  degrees(target_yaw_rad),
+                                //  degrees(curr_yaw_rad),
+                                //  degrees(yaw_err),
+                                //  degrees(yaw_rate_cmd),
+                                //  degrees(yaw_rate_max));
+                   // last_plnd_yaw_dbg_ms = now_ms;
+                //}
             }
         }
     }

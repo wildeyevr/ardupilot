@@ -177,6 +177,7 @@
 #include "UserParameters.h"
 #endif
 #include "mode.h"
+#include "mode_wingman.h"
 
 class Copter : public AP_Vehicle {
 public:
@@ -227,6 +228,7 @@ public:
     friend class ModeZigZag;
     friend class ModeAutorotate;
     friend class ModeTurtle;
+    friend class ModeWingman;
 
     friend class _AutoTakeoff;
 
@@ -1061,6 +1063,9 @@ private:
 #if MODE_LOITER_ENABLED
     ModeLoiter mode_loiter;
 #endif
+
+ModeWingman mode_wingman;
+
 #if MODE_POSHOLD_ENABLED
     ModePosHold mode_poshold;
 #endif
@@ -1102,6 +1107,7 @@ private:
 #if MODE_TURTLE_ENABLED
     ModeTurtle mode_turtle;
 #endif
+
 
     // mode.cpp
     Mode *mode_from_mode_num(const Mode::Number mode);

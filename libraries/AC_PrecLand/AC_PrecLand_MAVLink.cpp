@@ -84,16 +84,16 @@ void AC_PrecLand_MAVLink::handle_msg(const mavlink_landing_target_t &packet, uin
             _state.target_yaw_time_ms = timestamp_ms;
             _state.target_yaw_valid   = true;
 
-#if CONFIG_HAL_BOARD == HAL_BOARD_SITL
+//#if CONFIG_HAL_BOARD == HAL_BOARD_SITL
             // Debug in SITL so we can see what we're getting
-            GCS_SEND_TEXT(
-                MAV_SEVERITY_INFO,
-                "PLND RX q->yaw: yaw=%.1f deg (qw=%.3f qz=%.3f)",
-                (double)degrees(_state.target_yaw_rad),
-                (double)qw,
-                (double)qz
-            );
-#endif
+            //GCS_SEND_TEXT(
+              //  MAV_SEVERITY_INFO,
+              //  "PLND RX q->yaw: yaw=%.1f deg (qw=%.3f qz=%.3f)",
+               // (double)degrees(_state.target_yaw_rad),
+               // (double)qw,
+               // (double)qz
+           // );
+//#endif
         } else {
             // Explicitly clear validity if sender stops providing orientation
             _state.target_yaw_valid = false;

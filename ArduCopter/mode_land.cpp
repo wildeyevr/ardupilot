@@ -78,14 +78,50 @@ void ModeLand::gps_run()
         motors->set_desired_spool_state(AP_Motors::DesiredSpoolState::THROTTLE_UNLIMITED);
 
         // pause before beginning land descent
-        if (land_pause && millis()-land_start_time >= LAND_WITH_DELAY_MS) {
+        if (land_pause && millis() - land_start_time >= LAND_WITH_DELAY_MS) {
             land_pause = false;
         }
+
+#if AC_PRECLAND_ENABLED
+        // If precision landing is active and the MAVLink backend provides yaw,
+        // drive the vehicle's yaw towards the target yaw reported by precland.
+        if (copter.ap.prec_land_active) {
+
+            // Require reasonably fresh yaw samples
+            const uint32_t yaw_age_ms = copter.precland.target_yaw_age_ms();
+            static const uint32_t MAX_PLND_YAW_AGE_MS = 200U;
+
+            if (yaw_age_ms <= MAX_PLND_YAW_AGE_MS) {
+                float target_yaw_rad;
+                const bool have_yaw = copter.precland.get_target_yaw_rad(target_yaw_rad);
+
+                if (have_yaw) {
+                    // current vehicle yaw in earth frame (radians)
+                    const float curr_yaw_rad = ahrs.get_yaw_rad();
+                    const float yaw_err = wrap_PI(target_yaw_rad - curr_yaw_rad);
+
+                    // Simple P-controller from yaw error -> yaw rate (rad/s)
+                    const float k_yaw = 2.0f;   // tune later if needed
+                    float yaw_rate_cmd = k_yaw * yaw_err;
+
+                    // Limit yaw rate (e.g. ~60 deg/s)
+                    const float yaw_rate_max = radians(60.0f);
+                    yaw_rate_cmd = constrain_float(yaw_rate_cmd, -yaw_rate_max, yaw_rate_max);
+
+                    // Feed both the desired yaw angle and rate into the AutoYaw helper.
+                    // land_run_horizontal_control() will call auto_yaw.get_heading()
+                    // and use this heading to generate attitude targets.
+                    auto_yaw.set_yaw_angle_and_rate_rad(target_yaw_rad, yaw_rate_cmd);
+                }
+            }
+        }
+#endif // AC_PRECLAND_ENABLED
 
         // run normal landing or precision landing (if enabled)
         land_run_normal_or_precland(land_pause);
     }
 }
+
 
 // land_nogps_run - runs the land controller
 //      pilot controls roll and pitch angles

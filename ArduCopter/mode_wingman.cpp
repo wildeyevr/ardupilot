@@ -7,7 +7,7 @@
 // Offset (in NE frame, meters) from the precision-landing target that
 // Wingman will try to hold.  Positive N is "north", positive E is "east".
 static const float WINGMAN_OFFSET_N_M     = 10.0f;
-static const float WINGMAN_OFFSET_E_M     = 10.0f;   // 10 m west of target
+static const float WINGMAN_OFFSET_E_M     = 10.0f;
 
 // Altitudes in meters above EKF origin (NEU frame z)
 static const float WINGMAN_LAUNCH_ALT_M   = 15.0f;    // initial launch altitude

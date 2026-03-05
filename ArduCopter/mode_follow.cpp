@@ -79,6 +79,8 @@ void ModeFollow::run()
         return;
     }
 
+    g2.follow.update_estimates();
+
     // Initialize follow offset if not yet set.
     // Prevents vehicle from starting directly on top of the lead vehicle.
     g2.follow.init_offsets_if_required();
@@ -89,10 +91,11 @@ void ModeFollow::run()
     float yaw_rad = attitude_control->get_att_target_euler_rad().z;
     float yaw_rate_rads = 0.0f;
 
-    Vector3p pos_ofs_ned;         // position of lead + offset, in NED frame (from AP_Follow)
-    Vector3f vel_ofs_ned;         // velocity of lead + offset, NED
-    Vector3f accel_ofs_ned;       // accel of lead + offset, NED
-    const bool have_target = g2.follow.get_ofs_pos_vel_accel_NED_m(pos_ofs_ned, vel_ofs_ned, accel_ofs_ned);
+    Vector3p pos_ofs_ned_m;        // NED position in meters
+    Vector3f vel_ofs_ned_ms;       // NED velocity in m/s
+    Vector3f accel_ofs_ned_mss;    // NED accel in m/s^2
+
+    const bool have_target = g2.follow.get_ofs_pos_vel_accel_NED_m(pos_ofs_ned_m, vel_ofs_ned_ms, accel_ofs_ned_mss);
 
     if (have_target) {
 
@@ -101,28 +104,47 @@ void ModeFollow::run()
         g2.follow.get_target_heading_deg(target_heading_deg);
         g2.follow.get_target_heading_rate_degs(target_heading_rate_degs);
 
-        // XY: NED north/east matches what Copter expects for horizontal (north/east)
-        pos_control->input_pos_vel_accel_xy(pos_ofs_ned.xy(), vel_ofs_ned.xy(), accel_ofs_ned.xy(), false);
+        // Convert NED meters -> NEU centimeters for AC_PosControl
+        Vector2p pos_ne_cm;
+        pos_ne_cm.x = (postype_t)pos_ofs_ned_m.x * 100.0;
+        pos_ne_cm.y = (postype_t)pos_ofs_ned_m.y * 100.0;
 
-        // Z: AP_Follow provides NED (+Down). Copter position controller Z is +Up.
-        // Convert NED -> Up by negating position/velocity/accel Z.
-        float pos_ofs_up = -float(pos_ofs_ned.z);
-        float vel_ofs_up = -vel_ofs_ned.z;
-        const float accel_ofs_up = -accel_ofs_ned.z;
+        Vector2f vel_ne_cms;
+        vel_ne_cms.x = vel_ofs_ned_ms.x * 100.0f;
+        vel_ne_cms.y = vel_ofs_ned_ms.y * 100.0f;
 
-        pos_control->input_pos_vel_accel_z(pos_ofs_up, vel_ofs_up, accel_ofs_up, false);
+        Vector2f accel_ne_cmss;
+        accel_ne_cmss.x = accel_ofs_ned_mss.x * 100.0f;
+        accel_ne_cmss.y = accel_ofs_ned_mss.y * 100.0f;
+
+        pos_control->input_pos_vel_accel_xy(pos_ne_cm, vel_ne_cms, accel_ne_cmss, false);
+
+        // Z: NED down (m) -> NEU up (cm)
+        float pos_up_cm   = -(float)pos_ofs_ned_m.z * 100.0f;
+        float vel_up_cms  = -vel_ofs_ned_ms.z * 100.0f;
+        float accel_up_cmss = -accel_ofs_ned_mss.z * 100.0f;
+
+        pos_control->input_pos_vel_accel_z(pos_up_cm, vel_up_cms, accel_up_cmss, false);
 
         if (do_dbg) {
-            const auto pos_tgt_cm = pos_control->get_pos_target_cm();   // internal pos target in cm
+            const auto pos_tgt_cm = pos_control->get_pos_target_cm(); // NEU cm
             const uint8_t yaw_behave = (uint8_t)g2.follow.get_yaw_behave();
 
             gcs().send_text(
                 MAV_SEVERITY_INFO,
-                "FOLL ok yawB=%u pos_ofs(NED)=%.2f %.2f %.2f vel(NED)=%.2f %.2f %.2f acc(NED)=%.2f %.2f %.2f",
+                "FOLL ok yawB=%u pos_ofs(NED)m=%.2f %.2f %.2f vel(NED)m/s=%.2f %.2f %.2f acc(NED)m/s2=%.2f %.2f %.2f",
                 (unsigned)yaw_behave,
-                (double)pos_ofs_ned.x, (double)pos_ofs_ned.y, (double)pos_ofs_ned.z,
-                (double)vel_ofs_ned.x, (double)vel_ofs_ned.y, (double)vel_ofs_ned.z,
-                (double)accel_ofs_ned.x, (double)accel_ofs_ned.y, (double)accel_ofs_ned.z
+                (double)pos_ofs_ned_m.x, (double)pos_ofs_ned_m.y, (double)pos_ofs_ned_m.z,
+                (double)vel_ofs_ned_ms.x, (double)vel_ofs_ned_ms.y, (double)vel_ofs_ned_ms.z,
+                (double)accel_ofs_ned_mss.x, (double)accel_ofs_ned_mss.y, (double)accel_ofs_ned_mss.z
+            );
+
+            gcs().send_text(
+                MAV_SEVERITY_INFO,
+                "FOLL in(NEU cm)=pos(%.1f %.1f %.1f) vel(%.1f %.1f %.1f) acc(%.1f %.1f %.1f)",
+                (double)pos_ne_cm.x, (double)pos_ne_cm.y, (double)pos_up_cm,
+                (double)vel_ne_cms.x, (double)vel_ne_cms.y, (double)vel_up_cms,
+                (double)accel_ne_cmss.x, (double)accel_ne_cmss.y, (double)accel_up_cmss
             );
 
             gcs().send_text(
@@ -134,28 +156,18 @@ void ModeFollow::run()
                 (double)target_heading_deg,
                 (double)target_heading_rate_degs
             );
-
-            gcs().send_text(
-                MAV_SEVERITY_INFO,
-                "FOLL zconv pos_up=%.2f vel_up=%.2f acc_up=%.2f",
-                (double)pos_ofs_up,
-                (double)vel_ofs_up,
-                (double)accel_ofs_up
-            );
         }
 
-        // Determine desired yaw behavior based on configured follow mode
+        // yaw behavior (unchanged)
         switch (g2.follow.get_yaw_behave()) {
 
             case AP_Follow::YAW_BEHAVE_FACE_LEAD_VEHICLE: {
-                // Face the target directly
-                Vector3p pos_ned;       // lead position (NED)
-                Vector3f vel_ned;
-                Vector3f accel_ned;
-                if (g2.follow.get_target_pos_vel_accel_NED_m(pos_ned, vel_ned, accel_ned)) {
-                    if (pos_ned.xy().length_squared() > 1.0) {
-                        yaw_rad = (pos_ned.xy() - pos_control->get_pos_target_cm().xy() / 100.0).tofloat().angle();
-                    }
+                Vector3p pos_ned_m;
+                Vector3f vel_ned_ms;
+                Vector3f accel_ned_mss;
+                if (g2.follow.get_target_pos_vel_accel_NED_m(pos_ned_m, vel_ned_ms, accel_ned_mss))
+                if (pos_ned_m.xy().length_squared() > 1.0f) {
+                    yaw_rad = (pos_ned_m.xy() - pos_control->get_pos_target_cm().xy() / 100.0f).tofloat().angle();
                 }
                 break;
             }
@@ -167,15 +179,14 @@ void ModeFollow::run()
             }
 
             case AP_Follow::YAW_BEHAVE_DIR_OF_FLIGHT: {
-                if (vel_ofs_ned.xy().length_squared() > 1.0) {
-                    yaw_rad = vel_ofs_ned.xy().angle();
+                if (vel_ofs_ned_ms.xy().length_squared() > 1.0f) {
+                    yaw_rad = vel_ofs_ned_ms.xy().angle();
                 }
                 break;
             }
 
             case AP_Follow::YAW_BEHAVE_NONE:
             default:
-                // do nothing
                 break;
         }
 
@@ -183,7 +194,7 @@ void ModeFollow::run()
 
         // Target data is invalid; hold using zero velocity and acceleration inputs
         Vector2f vel_ne_zero{};
-        const Vector2f accel_ne_zero{};
+        Vector2f accel_ne_zero{};
         pos_control->input_vel_accel_xy(vel_ne_zero, accel_ne_zero, false);
 
         float vel_up_zero = 0.0f;

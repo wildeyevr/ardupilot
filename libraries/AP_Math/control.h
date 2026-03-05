@@ -103,10 +103,17 @@ void shape_pos_vel_accel_xy(const Vector2p& pos_input, const Vector2f& vel_input
                             const Vector2p& pos, const Vector2f& vel, Vector2f& accel,
                             float vel_max, float accel_max,
                             float jerk_max, float dt, bool limit_total);
-void shape_pos_vel_accel_xy_float(const Vector2f& pos_input, const Vector2f& vel_input, const Vector2f& accel_input,
-                            const Vector2f& pos, const Vector2f& vel, Vector2f& accel,
-                            float vel_max, float accel_max,
-                            float jerk_max, float dt, bool limit_total);
+void shape_pos_vel_accel_xy_float(const Vector2f &pos_des,
+                                 const Vector2f &vel_des,
+                                 const Vector2f &accel_des,
+                                 const Vector2f &pos_est,
+                                 const Vector2f &vel_est,
+                                 Vector2f &accel_est,
+                                 float pos_err_scalar,
+                                 float accel_max,
+                                 float jerk_max,
+                                 float dt,
+                                 bool limit_output);
 
 // Computes a jerk-limited acceleration command to follow an angular position, velocity, and acceleration target.
 // - This function applies jerk-limited shaping to angular acceleration, based on input angle, angular velocity, and angular acceleration.

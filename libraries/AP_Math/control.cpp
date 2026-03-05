@@ -337,6 +337,66 @@ void shape_pos_vel_accel(postype_t pos_input, float vel_input, float accel_input
     shape_vel_accel(vel_target, accel_input, vel, accel, accel_min, accel_max, jerk_max, dt, limit_total);
 }
 
+#include <AP_Math/AP_Math.h>
+
+// Compute a jerk-limited acceleration update to steer an estimated 2D state
+// toward a desired pos/vel/accel. Only accel_est is modified.
+// This is a compatibility shim for branches that lack the native helper.
+void shape_pos_vel_accel_xy_float(const Vector2f &pos_des,
+                                 const Vector2f &vel_des,
+                                 const Vector2f &accel_des,
+                                 const Vector2f &pos_est,
+                                 const Vector2f &vel_est,
+                                 Vector2f &accel_est,
+                                 float pos_err_scalar,
+                                 float accel_max,
+                                 float jerk_max,
+                                 float dt,
+                                 bool limit_output)
+{
+    (void)pos_err_scalar;
+    (void)limit_output;
+
+    // Guard dt
+    if (!is_positive(dt)) {
+        return;
+    }
+
+    // Basic PD-on-(pos,vel) with accel feed-forward.
+    // We only get to change acceleration, so we choose an accel_cmd that would
+    // reduce both position and velocity error over ~dt.
+    const Vector2f pos_err = pos_des - pos_est;
+    const Vector2f vel_err = vel_des - vel_est;
+
+    // Choose gains that are stable for small dt:
+    // - position term ~ 1/dt^2
+    // - velocity term ~ 2/dt
+    const float inv_dt = 1.0f / dt;
+    const float kp = inv_dt * inv_dt;
+    const float kv = 2.0f * inv_dt;
+
+    Vector2f accel_cmd = accel_des + pos_err * kp + vel_err * kv;
+
+    // Limit commanded acceleration magnitude
+    if (is_positive(accel_max)) {
+        accel_cmd.limit_length(accel_max);
+    }
+
+    // Jerk limit: constrain how fast accel_est can move toward accel_cmd
+    if (is_positive(jerk_max)) {
+        const float da_max = jerk_max * dt;   // (m/s^3)*s = m/s^2
+        Vector2f delta_a = accel_cmd - accel_est;
+        const float delta_len = delta_a.length();
+        if (delta_len > da_max && delta_len > 0.0f) {
+            delta_a *= (da_max / delta_len);
+        }
+        accel_est += delta_a;
+    } else {
+        // no jerk limit: jump to command
+        accel_est = accel_cmd;
+    }
+}
+
 // 2D version
 void shape_pos_vel_accel_xy(const Vector2p& pos_input, const Vector2f& vel_input, const Vector2f& accel_input,
                             const Vector2p& pos, const Vector2f& vel, Vector2f& accel,

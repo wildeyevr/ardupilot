@@ -3601,6 +3601,18 @@ bool AP_AHRS::get_location_from_origin_offset_NED(Location &loc, const Vector3p 
 }
 
 // return location corresponding to vector relative to the
+// vehicle's origin
+bool AP_AHRS::get_location_from_origin_offset_NED_float(Location &loc, const Vector3f &offset_ned) const
+{
+    if (!get_origin(loc)) {
+        return false;
+    }
+    loc.offset_float(offset_ned);
+
+    return true;
+}
+
+// return location corresponding to vector relative to the
 // vehicle's home location
 bool AP_AHRS::get_location_from_home_offset_NED(Location &loc, const Vector3p &offset_ned) const
 {

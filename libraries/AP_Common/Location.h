@@ -66,10 +66,28 @@ public:
     // unmodified.
     template<typename T>
     bool get_vector_xy_from_origin_NE(T &vec_ne) const WARN_IF_UNUSED;
+    template<typename T>
+    bool get_vector_xy_from_origin_NE_cm(T &vec_ne) const WARN_IF_UNUSED;
     // converts location to a vector from origin; if this method returns
     // false then vec_neu is unmodified
     template<typename T>
+    bool get_vector_from_origin_NEU_cm(T &vec_neu) const WARN_IF_UNUSED;
+    // same as get_vector_from_origin_NEU_cm, but only here so we can
+    // continue to use it in LUA scripts:
+    template<typename T>
     bool get_vector_from_origin_NEU(T &vec_neu) const WARN_IF_UNUSED;
+
+    // get position as a vector (in metres) from origin (x,y only or
+    // x,y,z) return false on failure to get the vector which can only
+    // happen if the EKF origin has not been set yet x, y and z are in
+    // metres.  If this method returns false then vec_ne is
+    // unmodified.
+    template<typename T>
+    bool get_vector_xy_from_origin_NE_m(T &vec_ne) const;
+    template<typename T>
+    bool get_vector_from_origin_NEU_m(T &vec_neu) const;
+    template<typename T>
+    bool get_vector_from_origin_NED_m(T &vec_ned) const;
 
     // return horizontal distance in meters between two locations
     ftype get_distance(const Location &loc2) const;
@@ -96,6 +114,7 @@ public:
     // extrapolate latitude/longitude given distances (in meters) north
     // and east. Note that this is metres, *even for the altitude*.
     void offset(const Vector3p &ofs_ned);
+    void offset_float(const Vector3f &ofs_ned);
 
     // extrapolate latitude/longitude given bearing and distance
     void offset_bearing(ftype bearing_deg, ftype distance);

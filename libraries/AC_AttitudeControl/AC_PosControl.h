@@ -79,6 +79,11 @@ public:
     ///     by the kinematic shaping.
     void set_max_speed_accel_xy(float speed_cms, float accel_cmss);
 
+    // Sets horizontal correction limits for velocity (m/s) and acceleration (m/s²).
+    // These values constrain the PID correction path, not the desired trajectory.
+    // All arguments should be positive.
+    void NE_set_correction_speed_accel_m(float speed_ms, float accel_mss);
+
     /// set_max_speed_accel_xy - set the position controller correction velocity and acceleration limit
     ///     This should be done only during initialisation to avoid discontinuities
     void set_correction_speed_accel_xy(float speed_cms, float accel_cmss);

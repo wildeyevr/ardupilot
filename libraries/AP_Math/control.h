@@ -43,6 +43,7 @@ void update_vel_accel_xy(Vector2f& vel, const Vector2f& accel, float dt, const V
 // limit - specifies if the system is unable to continue to accelerate.
 // pos_error and vel_error - specifies the direction of the velocity error used in limit handling.
 void update_pos_vel_accel_xy(Vector2p& pos, Vector2f& vel, const Vector2f& accel, float dt, const Vector2f& limit, const Vector2f& pos_error, const Vector2f& vel_error);
+void update_pos_vel_accel_xy_float(Vector2f& pos, Vector2f& vel, const Vector2f& accel, float dt, const Vector2f& limit, const Vector2f& pos_error, const Vector2f& vel_error);
 
 /* shape_accel calculates a jerk limited path from the current acceleration to an input acceleration.
  The function takes the current acceleration and calculates the required jerk limited adjustment to the acceleration for the next time dt.
@@ -102,7 +103,23 @@ void shape_pos_vel_accel_xy(const Vector2p& pos_input, const Vector2f& vel_input
                             const Vector2p& pos, const Vector2f& vel, Vector2f& accel,
                             float vel_max, float accel_max,
                             float jerk_max, float dt, bool limit_total);
+void shape_pos_vel_accel_xy_float(const Vector2f& pos_input, const Vector2f& vel_input, const Vector2f& accel_input,
+                            const Vector2f& pos, const Vector2f& vel, Vector2f& accel,
+                            float vel_max, float accel_max,
+                            float jerk_max, float dt, bool limit_total);
 
+// Computes a jerk-limited acceleration command to follow an angular position, velocity, and acceleration target.
+// - This function applies jerk-limited shaping to angular acceleration, based on input angle, angular velocity, and angular acceleration.
+// - Internally computes a target angular velocity using a square-root controller on the angle error.
+// - Velocity and acceleration are both optionally constrained:
+//   - If `limit_total` is true, limits apply to the total (not just correction) command.
+//   - Setting `angle_vel_max` or `angle_accel_max` to zero disables that respective limit.
+// - The acceleration output is shaped toward the target using `shape_vel_accel`.
+// Used for attitude control with limited angular velocity and angular acceleration (e.g., roll/pitch shaping).
+void shape_angle_vel_accel(float angle_desired, float angle_vel_desired, float angle_accel_desired,
+                         float angle, float angle_vel, float& angle_accel,
+                         float angle_vel_min, float angle_vel_max, float angle_accel_max,
+                         float angle_jerk_max, float dt, bool limit_total);
 
 /* limit_accel_xy limits the acceleration to prioritise acceleration perpendicular to the provided velocity vector.
  Input parameters are:

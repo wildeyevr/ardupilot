@@ -14,6 +14,7 @@
 
 // maximum velocities and accelerations
 #define WPNAV_ACCELERATION              250.0f      // maximum horizontal acceleration in cm/s/s that wp navigation will request
+#define WPNAV_ACCELERATION_MS           2.5        // default horizontal acceleration limit for waypoint navigation (m/s²)
 
 class AC_WPNav
 {
@@ -75,6 +76,10 @@ public:
     /// get default target horizontal velocity during wp navigation
     float get_default_speed_xy() const { return _wp_speed_cms; }
 
+    // Returns the default horizontal speed in m/s used during waypoint navigation.
+    // Derived from the WP_SPD parameter.
+    float get_default_speed_NE_ms() const { return _wp_speed_ms; }
+
     /// get default target climb speed in cm/s during missions
     float get_default_speed_up() const { return _wp_speed_up_cms; }
 
@@ -87,6 +92,9 @@ public:
     /// get_wp_acceleration - returns acceleration in cm/s/s during missions
     float get_wp_acceleration() const { return (is_positive(_wp_accel_cmss)) ? _wp_accel_cmss : WPNAV_ACCELERATION; }
 
+    // Returns the horizontal acceleration in m/s² used during waypoint navigation.
+    // Derived from the WP_ACC parameter. Falls back to a default if unset.
+    float get_wp_acceleration_mss() const { return (is_positive(_wp_accel_mss)) ? _wp_accel_mss : WPNAV_ACCELERATION_MS; }
     /// get_corner_acceleration - returns maximum acceleration in cm/s/s used during cornering in missions
     float get_corner_acceleration() const { return (is_positive(_wp_accel_c_cmss)) ? _wp_accel_c_cmss : 2.0 * get_wp_acceleration(); }
 
@@ -242,11 +250,13 @@ protected:
     const AC_AttitudeControl& _attitude_control;
 
     // parameters
+    AP_Float    _wp_speed_ms;       // default horizontal speed in m/s for waypoint navigation
     AP_Float    _wp_speed_cms;          // default maximum horizontal speed in cm/s during missions
     AP_Float    _wp_speed_up_cms;       // default maximum climb rate in cm/s
     AP_Float    _wp_speed_down_cms;     // default maximum descent rate in cm/s
     AP_Float    _wp_radius_cm;          // distance from a waypoint in cm that, when crossed, indicates the wp has been reached
     AP_Float    _wp_accel_cmss;         // horizontal acceleration in cm/s/s during missions
+    AP_Float    _wp_accel_mss;      // maximum horizontal acceleration in m/s² used during waypoint tracking
     AP_Float    _wp_accel_c_cmss;       // cornering acceleration in cm/s/s during missions
     AP_Float    _wp_accel_z_cmss;       // vertical acceleration in cm/s/s during missions
     AP_Float    _wp_jerk;               // maximum jerk used to generate scurve trajectories in m/s/s/s

@@ -3,6 +3,7 @@
 #include "Copter.h"
 #include <AP_Math/chirp.h>
 #include <AP_ExternalControl/AP_ExternalControl_config.h> // TODO why is this needed if Copter.h includes this
+#include <AP_HAL/Semaphores.h>
 
 #if AP_COPTER_ADVANCED_FAILSAFE_ENABLED
 #include "afs_copter.h"
@@ -1866,20 +1867,23 @@ public:
     void exit() override;
     void run() override;
 
-    bool requires_GPS() const override { return true; }
+    bool requires_position() const { return true; }
     bool has_manual_throttle() const override { return false; }
     bool allows_arming(AP_Arming::Method method) const override { return false; }
     bool is_autopilot() const override { return true; }
 
+    // Return true if this mode is enabled, used by MAVLink available modes
+    bool enabled() const;
+
 protected:
 
-    const char *name() const override { return "FOLLOW"; }
+    const char *name() const override { return "Follow"; }
     const char *name4() const override { return "FOLL"; }
 
     // for reporting to GCS
     bool get_wp(Location &loc) const override;
-    uint32_t wp_distance() const override;
-    int32_t wp_bearing() const override;
+    float  wp_distance_m() const;
+    float wp_bearing_deg() const;
 
     uint32_t last_log_ms;   // system time of last time desired velocity was logging
 };

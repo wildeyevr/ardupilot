@@ -233,6 +233,24 @@ bool Location::get_alt_m(AltFrame desired_frame, float &ret_alt) const
 // converts location to a vector from origin; if this method returns
 // false then vec_ne is unmodified
 template<typename T>
+bool Location::get_vector_xy_from_origin_NE_cm(T &vec_ne) const
+{
+    Location ekf_origin;
+    if (!AP::ahrs().get_origin(ekf_origin)) {
+        return false;
+    }
+    vec_ne.x = (lat-ekf_origin.lat) * LATLON_TO_CM;
+    vec_ne.y = diff_longitude(lng,ekf_origin.lng) * LATLON_TO_CM * longitude_scale((lat+ekf_origin.lat)/2);
+    return true;
+}
+
+// define for float and position vectors
+template bool Location::get_vector_xy_from_origin_NE_cm<Vector2f>(Vector2f &vec_ne) const;
+#if HAL_WITH_POSTYPE_DOUBLE
+template bool Location::get_vector_xy_from_origin_NE_cm<Vector2p>(Vector2p &vec_ne) const;
+#endif
+
+template<typename T>
 bool Location::get_vector_xy_from_origin_NE(T &vec_ne) const
 {
     Location ekf_origin;
@@ -271,11 +289,78 @@ bool Location::get_vector_from_origin_NEU(T &vec_neu) const
     return true;
 }
 
+// converts location to a vector from origin; if this method returns
+// false then vec_neu is unmodified
+template<typename T>
+bool Location::get_vector_from_origin_NEU_cm(T &vec_neu) const
+{
+    // convert altitude
+    int32_t alt_above_origin_cm = 0;
+    if (!get_alt_cm(AltFrame::ABOVE_ORIGIN, alt_above_origin_cm)) {
+        return false;
+    }
+
+    // convert lat, lon
+    if (!get_vector_xy_from_origin_NE(vec_neu.xy())) {
+        return false;
+    }
+
+    vec_neu.z = alt_above_origin_cm;
+
+    return true;
+}
+
 // define for float and position vectors
 template bool Location::get_vector_from_origin_NEU<Vector3f>(Vector3f &vec_neu) const;
 #if HAL_WITH_POSTYPE_DOUBLE
 template bool Location::get_vector_from_origin_NEU<Vector3p>(Vector3p &vec_neu) const;
 #endif
+
+template<typename T>
+bool Location::get_vector_xy_from_origin_NE_m(T &vec_ne) const
+{
+    if (!get_vector_xy_from_origin_NE_cm(vec_ne)) {
+        return false;
+    }
+    vec_ne *= 0.01;
+    return true;
+}
+template bool Location::get_vector_xy_from_origin_NE_m<Vector2f>(Vector2f &vec_ne) const;
+#if HAL_WITH_POSTYPE_DOUBLE
+template bool Location::get_vector_xy_from_origin_NE_m<Vector2p>(Vector2p &vec_ne) const;
+#endif
+
+template<typename T>
+bool Location::get_vector_from_origin_NED_m(T &vec_ned) const
+{
+    if (!get_vector_from_origin_NEU_cm(vec_ned)) {
+        return false;
+    }
+    vec_ned *= 0.01;
+    vec_ned.z *= -1.0;
+    return true;
+}
+// define for float and position vectors
+template bool Location::get_vector_from_origin_NED_m<Vector3f>(Vector3f &vec_ned) const;
+#if HAL_WITH_POSTYPE_DOUBLE
+template bool Location::get_vector_from_origin_NED_m<Vector3p>(Vector3p &vec_ned) const;
+#endif
+
+template<typename T>
+bool Location::get_vector_from_origin_NEU_m(T &vec_neu) const
+{
+    if (!get_vector_from_origin_NEU_cm(vec_neu)) {
+        return false;
+    }
+    vec_neu *= 0.01;
+    return true;
+}
+// define for float and position vectors
+template bool Location::get_vector_from_origin_NEU_m<Vector3f>(Vector3f &vec_neu) const;
+#if HAL_WITH_POSTYPE_DOUBLE
+template bool Location::get_vector_from_origin_NEU_m<Vector3p>(Vector3p &vec_neu) const;
+#endif
+
 
 #endif  // AP_AHRS_ENABLED
 
@@ -368,6 +453,14 @@ void Location::offset(ftype ofs_north, ftype ofs_east)
 // extrapolate latitude/longitude given distances (in meters) north
 // and east. Note that this is metres, *even for the altitude*.
 void Location::offset(const Vector3p &ofs_ned)
+{
+    offset_latlng(lat, lng, ofs_ned.x, ofs_ned.y);
+    alt += -ofs_ned.z * 100;  // m -> cm
+}
+
+// extrapolate latitude/longitude given distances (in meters) north
+// and east. Note that this is metres, *even for the altitude*.
+void Location::offset_float(const Vector3f &ofs_ned)
 {
     offset_latlng(lat, lng, ofs_ned.x, ofs_ned.y);
     alt += -ofs_ned.z * 100;  // m -> cm

@@ -102,6 +102,23 @@ void update_pos_vel_accel_xy(Vector2p& pos, Vector2f& vel, const Vector2f& accel
     update_vel_accel_xy(vel, accel, dt, limit, vel_error);
 }
 
+void update_pos_vel_accel_xy_float(Vector2f& pos, Vector2f& vel, const Vector2f& accel, float dt, const Vector2f& limit, const Vector2f& pos_error, const Vector2f& vel_error)
+{
+    // move position and velocity forward by dt.
+    Vector2f delta_pos = vel * dt + accel * 0.5f * sq(dt);
+
+    if (!is_zero(limit.length_squared())) {
+        // zero delta_pos if it will increase the velocity error in the direction of limit
+        if (is_positive(delta_pos * limit) && is_positive(pos_error * limit)) {
+            delta_pos.zero();
+        }
+    }
+
+    pos += delta_pos;
+
+    update_vel_accel_xy(vel, accel, dt, limit, vel_error);
+}
+
 /* shape_accel calculates a jerk limited path from the current acceleration to an input acceleration.
  The function takes the current acceleration and calculates the required jerk limited adjustment to the acceleration for the next time dt.
  The kinematic path is constrained by :
@@ -357,6 +374,25 @@ void shape_pos_vel_accel_xy(const Vector2p& pos_input, const Vector2f& vel_input
     }
 
     shape_vel_accel_xy(vel_target, accel_input, vel, accel, accel_max, jerk_max, dt, limit_total);
+}
+
+// Shapes angular position, velocity, and acceleration using a jerk-limited square-root command model.
+// - Computes an angular velocity correction from angular position error using a square-root controller.
+// - Uses sqrt_controller_accel() to bias the angular velocity correction based on correction-frame closing rate.
+// - Forms an angular velocity target by adding the correction to the feedforward angular velocity.
+// - Computes an angular acceleration demand from angular velocity error using k_v and adds external angular
+//   acceleration feedforward.
+// - Optionally constrains angular velocity and angular acceleration magnitudes when limit_total is true.
+// - Applies jerk limiting via shape_accel() to ensure smooth angular acceleration transitions.
+// This is the angular (wrapped) form of shape_pos_vel_accel().
+void shape_angle_vel_accel(float angle_desired, float angle_vel_desired, float angle_accel_desired,
+                           float angle, float angle_vel, float& angle_accel,
+                           float angle_vel_min, float angle_vel_max, float angle_accel_max,
+                           float angle_jerk_max, float dt, bool limit_total)
+{
+    // Wrap desired angle to the nearest equivalent setpoint relative to the current angle.
+    const float angle_desired_wrapped = angle + wrap_PI(angle_desired - angle);
+    shape_pos_vel_accel( angle_desired_wrapped, angle_vel_desired, angle_accel_desired, angle, angle_vel, angle_accel, angle_vel_min, angle_vel_max, -angle_accel_max, angle_accel_max, angle_jerk_max, dt, limit_total);
 }
 
 /* limit_accel_xy limits the acceleration to prioritise acceleration perpendicular to the provided velocity vector.

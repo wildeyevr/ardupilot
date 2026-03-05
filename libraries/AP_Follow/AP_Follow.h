@@ -202,7 +202,7 @@ private:
     AP_Enum<Location::AltFrame>    _alt_type;          // altitude source for follow mode
     AC_P        _p_pos;             // Position error P-controller for optional altitude following
     AP_Int16    _options;           // Bitmask of follow behavior options (e.g., mount follow, etc.)
-    AP_Float    _timeout;           // position estimate timeout after x milliseconds
+    AP_Float    _timeout;           // position estimate timeout after x seconds
 
     AP_Float    _accel_max_ne_mss;  // Max horizontal acceleration for kinematic shaping (m/s²)
     AP_Float    _jerk_max_ne_msss;  // Max horizontal jerk for kinematic shaping (m/s³)

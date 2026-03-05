@@ -62,7 +62,7 @@ extern const AP_HAL::HAL& hal;
 #endif
 
 #ifndef AP_FOLLOW_DEBUG
-#define AP_FOLLOW_DEBUG 1
+#define AP_FOLLOW_DEBUG 0
 #endif
 
 #ifndef AP_FOLLOW_DEBUG_HZ

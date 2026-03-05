@@ -61,26 +61,6 @@ extern const AP_HAL::HAL& hal;
  #define AP_FOLLOW_DIST_MAX_DEFAULT 100
 #endif
 
-#ifndef AP_FOLLOW_DEBUG
-#define AP_FOLLOW_DEBUG 0
-#endif
-
-#ifndef AP_FOLLOW_DEBUG_HZ
-#define AP_FOLLOW_DEBUG_HZ 2
-#endif
-
-#if AP_FOLLOW_DEBUG
-static inline bool ap_follow_dbg_rate_limit(uint32_t &last_ms)
-{
-    const uint32_t now = AP_HAL::millis();
-    if (now - last_ms >= (1000U / AP_FOLLOW_DEBUG_HZ)) {
-        last_ms = now;
-        return true;
-    }
-    return false;
-}
-#endif
-
 
 //==============================================================================
 // Constructor
@@ -248,13 +228,6 @@ AP_Follow::AP_Follow() :
     AP_Param::setup_object_defaults(this, var_info);
 }
 
-static bool get_curr_pos_ned_m(Vector3f &pos_ned_m)
-{
-    // AP_AHRS::get_relative_position_NED_origin() is already NED (meters)
-    // per AP_AHRS.h contract.
-    return AP::ahrs().get_relative_position_NED_origin(pos_ned_m);
-}
-
 
 //==============================================================================
 // Target Estimation Update Functions
@@ -280,82 +253,50 @@ void AP_Follow::update_estimates()
 
     const uint32_t now = AP_HAL::millis();
 
-    // Ensure estimation timer is initialized
-    if (_last_estimation_update_ms == 0) {
-        _last_estimation_update_ms = now;
-    }
-
     // calculate time since last location update in seconds
     const float dt = (now - _last_location_update_ms) * 0.001f;
 
     // project target's position and velocity forward using simple kinematics
-    const Vector3f delta_pos_m = _target_vel_ned_ms * dt + _target_accel_ned_mss * 0.5f * sq(dt);
-    const Vector3f delta_vel_ms = _target_accel_ned_mss * dt;
-    const float delta_heading_rad = radians(_target_heading_rate_degs) * dt;
+    Vector3f delta_pos_m = _target_vel_ned_ms * dt + _target_accel_ned_mss * 0.5f * sq(dt);
+    Vector3f delta_vel_ms = _target_accel_ned_mss * dt;
+    float delta_heading_rad = radians(_target_heading_rate_degs) * dt;
 
     // calculate time since last estimation update
     const float e_dt = (now - _last_estimation_update_ms) * 0.001f;
 
-    const bool valid_kinematic_params =
-        (_accel_max_ne_mss > 0.0f) && (_jerk_max_ne_msss > 0.0f) &&
-        (_accel_max_d_mss  > 0.0f) && (_jerk_max_d_msss  > 0.0f) &&
-        (_accel_max_h_degss > 0.0f) && (_jerk_max_h_degsss > 0.0f);
+    const bool valid_kinematic_params = (_accel_max_ne_mss > 0.0f) && (_jerk_max_ne_msss > 0.0f) &&
+                                (_accel_max_d_mss > 0.0f) && (_jerk_max_d_msss > 0.0f) &&
+                                (_accel_max_h_degss > 0.0f) && (_jerk_max_h_degsss > 0.0f);
 
     if (_estimate_valid && valid_kinematic_params) {
-        update_pos_vel_accel_xy_float(_estimate_pos_ned_m.xy(),
-                                      _estimate_vel_ned_ms.xy(),
-                                      _estimate_accel_ned_mss.xy(),
-                                      e_dt, Vector2f(), Vector2f(), Vector2f());
+        // update X/Y position, velocity, acceleration with shaping
+        update_pos_vel_accel_xy(_estimate_pos_ned_m.xy(), _estimate_vel_ned_ms.xy(), _estimate_accel_ned_mss.xy(), e_dt, Vector2f(), Vector2f(), Vector2f());
 
-        postype_t pz = _estimate_pos_ned_m.z;
-        update_pos_vel_accel(pz,
-                             _estimate_vel_ned_ms.z,
-                             _estimate_accel_ned_mss.z,
-                             (postype_t)e_dt,
-                             (postype_t)0.0, (postype_t)0.0, (postype_t)0.0);
-        _estimate_pos_ned_m.z = (float)pz;
+        // update Z axis position, velocity, acceleration without shaping (direct update)
+        update_pos_vel_accel(_estimate_pos_ned_m.z, _estimate_vel_ned_ms.z, _estimate_accel_ned_mss.z, e_dt, 0.0, 0.0, 0.0);
 
-        // NOTE: if shape_pos_vel_accel_xy_float isn't available in 4.6.x,
-        // you'll need to backport it or disable this call.
-        shape_pos_vel_accel_xy_float(_target_pos_ned_m.xy() + delta_pos_m.xy(),
-                                     _target_vel_ned_ms.xy() + delta_vel_ms.xy(),
-                                     _target_accel_ned_mss.xy(),
-                                     _estimate_pos_ned_m.xy(),
-                                     _estimate_vel_ned_ms.xy(),
-                                     _estimate_accel_ned_mss.xy(),
-                                     0.0f,
-                                     _accel_max_ne_mss,
-                                     _jerk_max_ne_msss,
-                                     e_dt,
-                                     false);
+        // apply horizontal shaping to refine estimate toward projected target state
+        shape_pos_vel_accel_xy(_target_pos_ned_m.xy() + delta_pos_m.xy().topostype(), _target_vel_ned_ms.xy() + delta_vel_ms.xy(), _target_accel_ned_mss.xy(),
+                               _estimate_pos_ned_m.xy(), _estimate_vel_ned_ms.xy(), _estimate_accel_ned_mss.xy(),
+                               0.0, _accel_max_ne_mss, _jerk_max_ne_msss, e_dt, false);
 
-        shape_angle_vel_accel(radians(_target_heading_deg) + delta_heading_rad,
-                              radians(_target_heading_rate_degs),
-                              0.0f,
-                              _estimate_heading_rad,
-                              _estimate_heading_rate_rads,
-                              _estimate_heading_accel_radss,
-                              0.0f, 0.0f,
-                              radians(_accel_max_h_degss),
-                              radians(_jerk_max_h_degsss),
-                              e_dt,
-                              false);
+        // apply angular shaping for heading estimate
+        shape_angle_vel_accel(radians(_target_heading_deg) + delta_heading_rad, radians(_target_heading_rate_degs), 0.0,
+                              _estimate_heading_rad, _estimate_heading_rate_rads, _estimate_heading_accel_radss,
+                              0.0, 0.0, radians(_accel_max_h_degss),
+                              radians(_jerk_max_h_degsss), e_dt, false);
 
+        // update heading angle separately to maintain proper wrapping [-PI, PI]
         postype_t estimate_heading_rad = _estimate_heading_rad;
-        update_pos_vel_accel(estimate_heading_rad,
-                             _estimate_heading_rate_rads,
-                             _estimate_heading_accel_radss,
-                             e_dt,
-                             0.0f, 0.0f, 0.0f);
+        update_pos_vel_accel(estimate_heading_rad, _estimate_heading_rate_rads, _estimate_heading_accel_radss, e_dt, 0.0, 0.0, 0.0);
         _estimate_heading_rad = wrap_PI(float(estimate_heading_rad));
-
     } else {
-        _estimate_pos_ned_m       = _target_pos_ned_m + delta_pos_m;
-        _estimate_vel_ned_ms      = _target_vel_ned_ms + delta_vel_ms;
-        _estimate_accel_ned_mss   = _target_accel_ned_mss;
-        _estimate_heading_rad     = radians(_target_heading_deg) + delta_heading_rad;
+        // no valid estimate yet: initialise from latest target position
+        _estimate_pos_ned_m = _target_pos_ned_m + delta_pos_m.topostype();
+        _estimate_vel_ned_ms = _target_vel_ned_ms + delta_vel_ms;
+        _estimate_accel_ned_mss = _target_accel_ned_mss;
+        _estimate_heading_rad = radians(_target_heading_deg) + delta_heading_rad;
         _estimate_heading_rate_rads = radians(_target_heading_rate_degs);
-        _estimate_heading_accel_radss = 0.0f;
         _estimate_valid = true;
     }
 
@@ -363,39 +304,41 @@ void AP_Follow::update_estimates()
 
     // calculate estimated position and velocity with offsets applied
     if (offset_m.is_zero() || (_offset_type == AP_FOLLOW_OFFSET_TYPE_NED)) {
-        _ofs_estimate_pos_ned_m   = _estimate_pos_ned_m + offset_m;
-        _ofs_estimate_vel_ned_ms  = _estimate_vel_ned_ms;
+        // offsets are in NED frame: simple addition
+        _ofs_estimate_pos_ned_m = _estimate_pos_ned_m + offset_m.topostype();
+        _ofs_estimate_vel_ned_ms = _estimate_vel_ned_ms;
         _ofs_estimate_accel_ned_mss = _estimate_accel_ned_mss;
-
     } else {
-        // offsets are in FRD frame: rotate by heading into NED
-        offset_m.xy().rotate(-_estimate_heading_rad);
-        _ofs_estimate_pos_ned_m   = _estimate_pos_ned_m + offset_m;
-        _ofs_estimate_vel_ned_ms  = _estimate_vel_ned_ms;
+        // offsets are in FRD frame: rotate by heading
+        offset_m.xy().rotate(_estimate_heading_rad);
+        _ofs_estimate_pos_ned_m = _estimate_pos_ned_m + offset_m.topostype();
+        _ofs_estimate_vel_ned_ms = _estimate_vel_ned_ms;
         _ofs_estimate_accel_ned_mss = _estimate_accel_ned_mss;
-
-        // add velocity/accel induced by the rotating offset: v = ω × r , a = α × r
-        //if (valid_kinematic_params) {
-          //  const Vector3f omega{0.0f, 0.0f, _estimate_heading_rate_rads};
-            //const Vector3f alpha{0.0f, 0.0f, _estimate_heading_accel_radss};
-
-           // _ofs_estimate_vel_ned_ms   += omega.cross(offset_m);
-            //_ofs_estimate_accel_ned_mss += alpha.cross(offset_m);
-        //}
+        // with kinematic shaping of heading we can improve our offset velocity and acceleration of the offset
+        if (valid_kinematic_params) {
+            Vector3f offset_cross = offset_m.cross(Vector3f{0.0, 0.0, 1.0});
+            float offset_length_m = offset_m.length();
+            _ofs_estimate_vel_ned_ms += offset_cross * offset_length_m * _estimate_heading_rate_rads;
+            _ofs_estimate_accel_ned_mss += offset_cross * offset_length_m * _estimate_heading_accel_radss;
+        }
     }
 
+    // update the distance and bearing to the target
     update_dist_and_bearing_to_target();
+
     _last_estimation_update_ms = now;
 
+    // Check if the target is within the maximum distance
     Vector3f current_position_ned_m;
-    if (!get_curr_pos_ned_m(current_position_ned_m)) {
+    if (!AP::ahrs().get_relative_position_NED_origin(current_position_ned_m)) {
+        // no idea where we are; knowing where other things are won't help.
         _estimate_valid = false;
         return;
     }
-
-    const Vector3f dist_vec_ned_m = _target_pos_ned_m - current_position_ned_m;
-
+    const Vector3p dist_vec_ned_m = _target_pos_ned_m - current_position_ned_m.topostype();
+    // If _dist_max_m is not positive, we don't check the distance
     if (is_positive(_dist_max_m.get()) && (dist_vec_ned_m.length() > _dist_max_m)) {
+        // target is too far away, mark the estimate invalid
         _estimate_valid = false;
     }
 }
@@ -412,7 +355,7 @@ bool AP_Follow::get_target_pos_vel_accel_NED_m(Vector3p &pos_ned_m, Vector3f &ve
         return false;
     }
 
-    pos_ned_m = _estimate_pos_ned_m.topostype();
+    pos_ned_m = _estimate_pos_ned_m;
     vel_ned_ms = _estimate_vel_ned_ms;
     accel_ned_mss = _estimate_accel_ned_mss;
 
@@ -426,7 +369,7 @@ bool AP_Follow::get_ofs_pos_vel_accel_NED_m(Vector3p &pos_ofs_ned_m, Vector3f &v
         return false;
     }
 
-    pos_ofs_ned_m = _ofs_estimate_pos_ned_m.topostype();
+    pos_ofs_ned_m = _ofs_estimate_pos_ned_m;
     vel_ofs_ned_ms = _ofs_estimate_vel_ned_ms;
     accel_ofs_ned_mss = _ofs_estimate_accel_ned_mss;
 
@@ -434,9 +377,7 @@ bool AP_Follow::get_ofs_pos_vel_accel_NED_m(Vector3p &pos_ofs_ned_m, Vector3f &v
 }
 
 // Retrieves distance vectors (with and without configured offsets) and the target’s velocity, all in the NED frame.
-bool AP_Follow::get_target_dist_and_vel_NED_m(Vector3f &dist_ned,
-                                              Vector3f &dist_with_offs,
-                                              Vector3f &vel_ned)
+bool AP_Follow::get_target_dist_and_vel_NED_m(Vector3f &dist_ned, Vector3f &dist_with_offs, Vector3f &vel_ned)
 {
     WITH_SEMAPHORE(_follow_sem);
 
@@ -445,16 +386,15 @@ bool AP_Follow::get_target_dist_and_vel_NED_m(Vector3f &dist_ned,
     }
 
     Vector3f current_position_ned_m;
-    if (!get_curr_pos_ned_m(current_position_ned_m)) {
+    if (!AP::ahrs().get_relative_position_NED_origin(current_position_ned_m)) {
         return false;
     }
 
-    const Vector3f dist_vec_ned_m     = _estimate_pos_ned_m     - current_position_ned_m;
-    const Vector3f ofs_dist_vec_ned_m = _ofs_estimate_pos_ned_m - current_position_ned_m;
-
-    dist_ned       = dist_vec_ned_m;
-    dist_with_offs = ofs_dist_vec_ned_m;
-    vel_ned        = _ofs_estimate_vel_ned_ms;
+    const Vector3p dist_vec_ned_m = _estimate_pos_ned_m - current_position_ned_m.topostype();
+    const Vector3p ofs_dist_vec = _ofs_estimate_pos_ned_m - current_position_ned_m.topostype();
+    dist_ned = dist_vec_ned_m.tofloat();
+    dist_with_offs = ofs_dist_vec.tofloat();
+    vel_ned = _ofs_estimate_vel_ned_ms;
 
     return true;
 }
@@ -481,7 +421,7 @@ bool AP_Follow::get_target_location_and_velocity(Location &loc, Vector3f &vel_ne
         return false;
     }
 
-    if (!AP::ahrs().get_location_from_origin_offset_NED_float(loc, _estimate_pos_ned_m)) {
+    if (!AP::ahrs().get_location_from_origin_offset_NED(loc, _estimate_pos_ned_m)) {
         return false;
     }
     vel_ned = _estimate_vel_ned_ms;
@@ -499,7 +439,7 @@ bool AP_Follow::get_target_location_and_velocity_ofs(Location &loc, Vector3f &ve
     if (!_estimate_valid) {
         return false;
     }
-    if (!AP::ahrs().get_location_from_origin_offset_NED(loc, _ofs_estimate_pos_ned_m.topostype())) {
+    if (!AP::ahrs().get_location_from_origin_offset_NED(loc, _ofs_estimate_pos_ned_m)) {
         return false;
     }
 
@@ -543,91 +483,47 @@ bool AP_Follow::get_target_heading_rate_degs(float &heading_rate_degs)
 // Handles incoming MAVLink messages to update the target's position, velocity, and heading.
 void AP_Follow::handle_msg(const mavlink_message_t &msg)
 {
-#if AP_FOLLOW_DEBUG
-    static uint32_t last_dbg_ms = 0;
-    const bool do_dbg = ap_follow_dbg_rate_limit(last_dbg_ms);
-#endif
-
+    // Invalidate the estimate if no position update has been received within the timeout period.
+    // If using automatic sysid tracking, clear the sysid and reset tracking state.
     if ((_last_location_update_ms == 0) ||
         (AP_HAL::millis() - _last_location_update_ms > AP_FOLLOW_SYSID_TIMEOUT_MS)) {
-
-#if AP_FOLLOW_DEBUG
-        if (do_dbg) {
-            GCS_SEND_TEXT(MAV_SEVERITY_WARNING,
-                          "AP_Follow sysid timeout/reset last_update_ms=%lu sysid=%u auto=%u (clearing if auto)",
-                          (unsigned long)_last_location_update_ms,
-                          (unsigned)_sysid.get(),
-                          (unsigned)_automatic_sysid);
-        }
-#endif
-
         if (_automatic_sysid) {
-            _sysid.set(0);
-            _sysid_used = 0;
+            _sysid.set(0);         // clear target system ID
+            _sysid_used = 0;       // reset used sysid tracking
         }
-        _estimate_valid = false;
-        _using_follow_target = false;
+        _estimate_valid = false;   // mark estimate as invalid
+        _using_follow_target = false; // reset follow-target usage flag
     }
 
     if (!should_handle_message(msg)) {
+        // ignore message if filtering rules reject it (e.g., wrong sysid)
         return;
     }
 
+    // decode MAVLink message
     bool updated = false;
 
     switch (msg.msgid) {
-    case MAVLINK_MSG_ID_GLOBAL_POSITION_INT:
+    case MAVLINK_MSG_ID_GLOBAL_POSITION_INT: {
+        // handle standard global position messages
         updated = handle_global_position_int_message(msg);
         break;
-
-    case MAVLINK_MSG_ID_FOLLOW_TARGET:
+    }
+    case MAVLINK_MSG_ID_FOLLOW_TARGET: {
+        // handle follow-target specific messages
         updated = handle_follow_target_message(msg);
         break;
-
-    default:
-        break;
     }
-
-#if AP_FOLLOW_DEBUG
-    if (do_dbg) {
-        const uint32_t now = AP_HAL::millis();
-        const uint32_t age_ms = (_last_location_update_ms == 0) ? 0 : (now - _last_location_update_ms);
-        GCS_SEND_TEXT(MAV_SEVERITY_INFO,
-                      "AP_Follow msgid=%u sysid=%u updated=%u estValid=%u usingFT=%u lastAgeMs=%lu",
-                      (unsigned)msg.msgid, (unsigned)msg.sysid,
-                      (unsigned)updated,
-                      (unsigned)_estimate_valid,
-                      (unsigned)_using_follow_target,
-                      (unsigned long)age_ms);
     }
-#endif
 
     if (updated) {
-
-        // If we just got our first good update (or we were invalidated), seed the estimate
-        // directly from the target state so the error-check doesn't immediately nuke us.
-        if (!_estimate_valid) {
-            _estimate_pos_ned_m           = _target_pos_ned_m;
-            _estimate_vel_ned_ms          = _target_vel_ned_ms;
-            _estimate_accel_ned_mss       = _target_accel_ned_mss;
-            _estimate_heading_rad         = radians(_target_heading_deg);
-            _estimate_heading_rate_rads   = radians(_target_heading_rate_degs);
-            _estimate_heading_accel_radss = 0.0f;
-            _last_estimation_update_ms    = AP_HAL::millis();
-            _estimate_valid               = true;
-        }
-
-        // Only check for divergence if we actually have a valid estimate
-        if (_estimate_valid && estimate_error_too_large()) {
-#if AP_FOLLOW_DEBUG
-            if (do_dbg) {
-                GCS_SEND_TEXT(MAV_SEVERITY_WARNING, "AP_Follow estimate reset: error too large");
-            }
-#endif
+        // Check if estimate needs reset based on position and velocity errors
+        if (estimate_error_too_large()) {
             _estimate_valid = false;
         }
 
 #if HAL_LOGGING_ENABLED
+        // log current follow diagnostic data
         Log_Write_FOLL();
 #endif
     }
@@ -636,65 +532,20 @@ void AP_Follow::handle_msg(const mavlink_message_t &msg)
 // Returns true if the incoming MAVLink message should be processed for target updates.
 bool AP_Follow::should_handle_message(const mavlink_message_t &msg) const
 {
-#if AP_FOLLOW_DEBUG
-    static uint32_t last_dbg_ms = 0;
-    const bool do_dbg = ap_follow_dbg_rate_limit(last_dbg_ms);
-#endif
-
+    // exit immediately if not enabled
     if (!_enabled) {
-#if AP_FOLLOW_DEBUG
-        if (do_dbg) {
-            GCS_SEND_TEXT(MAV_SEVERITY_WARNING,
-                          "AP_Follow ignore msgid=%u sysid=%u (disabled)",
-                          (unsigned)msg.msgid, (unsigned)msg.sysid);
-        }
-#endif
         return false;
     }
 
-    // Only process messages we actually consume
-    if (msg.msgid != MAVLINK_MSG_ID_GLOBAL_POSITION_INT &&
-        msg.msgid != MAVLINK_MSG_ID_FOLLOW_TARGET) {
-#if AP_FOLLOW_DEBUG
-        if (do_dbg) {
-            GCS_SEND_TEXT(MAV_SEVERITY_INFO,
-                          "AP_Follow ignore msgid=%u sysid=%u (unhandled msgid)",
-                          (unsigned)msg.msgid, (unsigned)msg.sysid);
-        }
-#endif
-        return false;
-        }
-
+    // skip our own messages
     if (msg.sysid == mavlink_system.sysid) {
-#if AP_FOLLOW_DEBUG
-        if (do_dbg) {
-            GCS_SEND_TEXT(MAV_SEVERITY_INFO,
-                          "AP_Follow ignore msgid=%u sysid=%u (self)",
-                          (unsigned)msg.msgid, (unsigned)msg.sysid);
-        }
-#endif
         return false;
     }
 
-    // Enforce target sysid if configured
+    // skip message if not from our target
     if (_sysid != 0 && msg.sysid != _sysid) {
-#if AP_FOLLOW_DEBUG
-        if (do_dbg) {
-            GCS_SEND_TEXT(MAV_SEVERITY_WARNING,
-                          "AP_Follow ignore msgid=%u sysid=%u (want sysid=%u)",
-                          (unsigned)msg.msgid, (unsigned)msg.sysid, (unsigned)_sysid.get());
-        }
-#endif
         return false;
     }
-
-#if AP_FOLLOW_DEBUG
-    if (do_dbg) {
-        GCS_SEND_TEXT(MAV_SEVERITY_INFO,
-                      "AP_Follow accept msgid=%u sysid=%u",
-                      (unsigned)msg.msgid, (unsigned)msg.sysid);
-    }
-#endif
 
     return true;
 }
@@ -704,31 +555,28 @@ bool AP_Follow::estimate_error_too_large() const
 {
     const float timeout_sec = _timeout;
 
+    // Calculate position thresholds based on maximum acceleration then deceleration for the timeout duration
     const float pos_thresh_horiz_m = _accel_max_ne_mss.get() * sq(timeout_sec * 0.5);
     const float pos_thresh_vert_m  = _accel_max_d_mss.get()  * sq(timeout_sec * 0.5);
 
+    // Calculate velocity thresholds using the new helper function
     const float vel_thresh_horiz_ms = calc_max_velocity_change(_accel_max_ne_mss.get(), _jerk_max_ne_msss.get(), timeout_sec);
     const float vel_thresh_vert_ms  = calc_max_velocity_change(_accel_max_d_mss.get(), _jerk_max_d_msss.get(), timeout_sec);
 
+    // Calculate current position and velocity errors
     const Vector3f pos_error = _estimate_pos_ned_m.tofloat() - _target_pos_ned_m.tofloat();
     const Vector3f vel_error = _estimate_vel_ned_ms - _target_vel_ned_ms;
 
-#if AP_FOLLOW_DEBUG
-    static uint32_t last_dbg_ms = 0;
-    if (ap_follow_dbg_rate_limit(last_dbg_ms)) {
-        GCS_SEND_TEXT(MAV_SEVERITY_WARNING,
-            "AP_Follow errchk posErr=%.2f/%.2f/%.2f velErr=%.2f/%.2f/%.2f thrPxy=%.2f thrPz=%.2f thrVxy=%.2f thrVz=%.2f",
-            (double)pos_error.x, (double)pos_error.y, (double)pos_error.z,
-            (double)vel_error.x, (double)vel_error.y, (double)vel_error.z,
-            (double)pos_thresh_horiz_m, (double)pos_thresh_vert_m,
-            (double)vel_thresh_horiz_ms, (double)vel_thresh_vert_ms);
-    }
-#endif
+    const Vector2f pos_error_xy = pos_error.xy();
+    const float pos_error_z = pos_error.z;
+    const Vector2f vel_error_xy = vel_error.xy();
+    const float vel_error_z = vel_error.z;
 
-    const bool pos_horiz_bad = pos_error.xy().length() > pos_thresh_horiz_m;
-    const bool vel_horiz_bad = vel_error.xy().length() > vel_thresh_horiz_ms;
-    const bool pos_vert_bad  = fabsf(pos_error.z) > pos_thresh_vert_m;
-    const bool vel_vert_bad  = fabsf(vel_error.z) > vel_thresh_vert_ms;
+    // Check horizontal and vertical separately
+    const bool pos_horiz_bad = pos_error_xy.length() > pos_thresh_horiz_m;
+    const bool vel_horiz_bad = vel_error_xy.length() > vel_thresh_horiz_ms;
+    const bool pos_vert_bad = fabsf(pos_error_z) > pos_thresh_vert_m;
+    const bool vel_vert_bad = fabsf(vel_error_z) > vel_thresh_vert_ms;
 
     return pos_horiz_bad || vel_horiz_bad || pos_vert_bad || vel_vert_bad;
 }
@@ -755,29 +603,17 @@ float AP_Follow::calc_max_velocity_change(float accel_max, float jerk_max, float
 // Decodes a GLOBAL_POSITION_INT MAVLink message to update the target’s position, velocity, and heading.
 bool AP_Follow::handle_global_position_int_message(const mavlink_message_t &msg)
 {
+    // decode GLOBAL_POSITION_INT message into packet struct
     mavlink_global_position_int_t packet;
     mavlink_msg_global_position_int_decode(&msg, &packet);
 
-#if AP_FOLLOW_DEBUG
-    static uint32_t last_dbg_ms = 0;
-    const bool do_dbg = ap_follow_dbg_rate_limit(last_dbg_ms);
-#endif
-
+    // ignore message if latitude and longitude are exactly zero (invalid GPS fix)
     if ((packet.lat == 0 && packet.lon == 0)) {
-#if AP_FOLLOW_DEBUG
-        if (do_dbg) {
-            GCS_SEND_TEXT(MAV_SEVERITY_WARNING, "AP_Follow GPI reject lat/lon=0");
-        }
-#endif
         return false;
     }
 
     if (_using_follow_target) {
-#if AP_FOLLOW_DEBUG
-        if (do_dbg) {
-            GCS_SEND_TEXT(MAV_SEVERITY_INFO, "AP_Follow GPI ignored (using FOLLOW_TARGET)");
-        }
-#endif
+        // if we are using follow_target, ignore global_position_int messages
         return false;
     }
 
@@ -794,84 +630,57 @@ bool AP_Follow::handle_global_position_int_message(const mavlink_message_t &msg)
             break;
 #if APM_BUILD_TYPE(APM_BUILD_ArduPlane) || APM_BUILD_TYPE(APM_BUILD_ArduCopter)
         case Location::AltFrame::ABOVE_TERRAIN:
+            /// Altitude comes in as AMSL
             target_location.set_alt_cm(packet.alt * 0.1, Location::AltFrame::ABSOLUTE);
+            // convert the incoming altitude to terrain altitude, but fail if there is no terrain data available
             if (!target_location.change_alt_frame(Location::AltFrame::ABOVE_TERRAIN)) {
-#if AP_FOLLOW_DEBUG
-                if (do_dbg) {
-                    GCS_SEND_TEXT(MAV_SEVERITY_WARNING, "AP_Follow GPI reject: no terrain data for TERRAIN alt frame");
-                }
-#endif
                 return false;
-            }
+            };
             break;
 #endif
         default:
-#if AP_FOLLOW_DEBUG
-            if (do_dbg) {
-                GCS_SEND_TEXT(MAV_SEVERITY_WARNING, "AP_Follow GPI reject: invalid alt_type=%u", (unsigned)_alt_type.get());
-            }
-#endif
+            // don't process the packet if the _alt_type is invalid
             return false;
     }
 
-    Vector3f target_pos_neu_m;
+    // convert global location to local NED frame position
+    Vector3p target_pos_neu_m;
     if (!target_location.get_vector_from_origin_NEU_m(target_pos_neu_m)) {
-#if AP_FOLLOW_DEBUG
-        if (do_dbg) {
-            GCS_SEND_TEXT(MAV_SEVERITY_WARNING, "AP_Follow GPI reject: cannot get NEU from origin");
-        }
-#endif
         return false;
     }
 
     if (packet.hdg <= 36000) {
+        // valid heading field available (in centi-degrees)
         _target_heading_deg = packet.hdg * 0.01f;
     } else if (_offset_type == AP_FOLLOW_OFFSET_TYPE_RELATIVE) {
-#if AP_FOLLOW_DEBUG
-        if (do_dbg) {
-            GCS_SEND_TEXT(MAV_SEVERITY_WARNING, "AP_Follow GPI reject: missing heading but OFS_TYPE=REL");
-        }
-#endif
+        // heading missing but relative offset mode requires heading -> reject
         return false;
     } else {
+        // no heading available: set heading rate to zero
         _target_heading_rate_degs = 0.0f;
     }
 
     _target_pos_ned_m.xy() = target_pos_neu_m.xy();
     _target_pos_ned_m.z = -target_pos_neu_m.z;
 
-    _target_vel_ned_ms.x = packet.vx * 0.01f;
-    _target_vel_ned_ms.y = packet.vy * 0.01f;
-    _target_vel_ned_ms.z = packet.vz * 0.01f;
+    // decode target velocity components (cm/s converted to m/s)
+    _target_vel_ned_ms.x = packet.vx * 0.01f; // velocity north
+    _target_vel_ned_ms.y = packet.vy * 0.01f; // velocity east
+    _target_vel_ned_ms.z = packet.vz * 0.01f; // velocity down
 
+    // target acceleration not available in GLOBAL_POSITION_INT
     _target_accel_ned_mss.zero();
 
+    // apply jitter-corrected timestamp to this update
     _last_location_update_ms = _jitter.correct_offboard_timestamp_msec(packet.time_boot_ms, AP_HAL::millis());
 
+    // if sysid not yet set, adopt sender’s sysid and enable automatic sysid tracking
     if (_sysid == 0) {
         _sysid.set(msg.sysid);
         _sysid_used = 0;
         _estimate_valid = false;
         _automatic_sysid = true;
-#if AP_FOLLOW_DEBUG
-        if (do_dbg) {
-            GCS_SEND_TEXT(MAV_SEVERITY_INFO, "AP_Follow GPI adopt sysid=%u (auto)", (unsigned)msg.sysid);
-        }
-#endif
     }
-
-#if AP_FOLLOW_DEBUG
-    if (do_dbg) {
-        GCS_SEND_TEXT(MAV_SEVERITY_INFO,
-                      "AP_Follow GPI ok sysid=%u lat=%ld lon=%ld hdg=%.1f vxvyvz=%.2f %.2f %.2f time_boot_ms=%lu last_update_ms=%lu",
-                      (unsigned)msg.sysid,
-                      (long)packet.lat, (long)packet.lon,
-                      (double)_target_heading_deg,
-                      (double)_target_vel_ned_ms.x, (double)_target_vel_ned_ms.y, (double)_target_vel_ned_ms.z,
-                      (unsigned long)packet.time_boot_ms,
-                      (unsigned long)_last_location_update_ms);
-    }
-#endif
 
     return true;
 }
@@ -879,120 +688,98 @@ bool AP_Follow::handle_global_position_int_message(const mavlink_message_t &msg)
 // Decodes a FOLLOW_TARGET MAVLink message to update the target’s position, velocity, acceleration, and orientation.
 bool AP_Follow::handle_follow_target_message(const mavlink_message_t &msg)
 {
+    // decode FOLLOW_TARGET message into packet struct
     mavlink_follow_target_t packet;
     mavlink_msg_follow_target_decode(&msg, &packet);
 
-#if AP_FOLLOW_DEBUG
-    static uint32_t last_dbg_ms = 0;
-    const bool do_dbg = ap_follow_dbg_rate_limit(last_dbg_ms);
-#endif
-
+    // ignore message if latitude and longitude are exactly zero (invalid GPS fix)
     if ((packet.lat == 0 && packet.lon == 0)) {
-#if AP_FOLLOW_DEBUG
-        if (do_dbg) {
-            GCS_SEND_TEXT(MAV_SEVERITY_WARNING, "AP_Follow FT reject lat/lon=0");
-        }
-#endif
         return false;
     }
 
-    if ((packet.est_capabilities & (1U<<0)) == 0) {
-#if AP_FOLLOW_DEBUG
-        if (do_dbg) {
-            GCS_SEND_TEXT(MAV_SEVERITY_WARNING, "AP_Follow FT reject: missing est_cap bit0 (pos). caps=0x%08lx",
-                          (unsigned long)packet.est_capabilities);
-        }
-#endif
+    // require that at least position is estimated (bit 0 of est_capabilities)
+    if ((packet.est_capabilities & (1<<0)) == 0) {
         return false;
     }
 
-    // FOLLOW_TARGET.alt is meters AMSL (per MAVLink message definition).
-    // Convert to cm and build an ABSOLUTE Location.
-    Location target_location;
-    target_location.lat = packet.lat;
-    target_location.lng = packet.lon;
-    target_location.set_alt_cm((float)packet.alt * 100.0f, Location::AltFrame::ABSOLUTE);
+    // build Location object from latitude, longitude, and altitude (alt in meters)
+    const Location target_location {
+        packet.lat,
+        packet.lon,
+        int32_t(packet.alt * 100),  // convert meters to centimeters
+        Location::AltFrame::ABSOLUTE
+    };
 
-    // Convert target global -> origin offset in NEU meters
-    Vector3f target_pos_neu_m;
+    // convert global location to local NED frame position
+    Vector3p target_pos_neu_m;
     if (!target_location.get_vector_from_origin_NEU_m(target_pos_neu_m)) {
-#if AP_FOLLOW_DEBUG
-        if (do_dbg) {
-            GCS_SEND_TEXT(MAV_SEVERITY_WARNING, "AP_Follow FT reject: cannot get NEU from origin");
-        }
-#endif
         return false;
     }
 
-    // Heading from quaternion if provided
-    if (packet.est_capabilities & (1U << 3)) {
+    // adjust Z coordinate to NED frame (NEU altitude -> NED)
+    Location origin;
+    if (!AP::ahrs().get_origin(origin)) {
+        return false;
+    }
+
+    // decode attitude if available (bit 3 of est_capabilities)
+    if (packet.est_capabilities & (1 << 3)) {
+        // reconstruct quaternion from packet
         Quaternion q{packet.attitude_q[0], packet.attitude_q[1], packet.attitude_q[2], packet.attitude_q[3]};
         float roll, pitch, yaw;
         q.to_euler(roll, pitch, yaw);
 
+        // store heading in degrees, wrapped 0–360
         _target_heading_deg = wrap_360(degrees(yaw));
 
+        // transform body rates (roll, pitch, yaw) to earth frame rates
         Matrix3f R;
         q.rotation_matrix(R);
-        Vector3f omega_body{packet.rates[0], packet.rates[1], packet.rates[2]};
-        Vector3f omega_world = R * omega_body;
-        _target_heading_rate_degs = degrees(omega_world.z);
+        Vector3f omega_body = Vector3f{packet.rates[0], packet.rates[1], packet.rates[2]};
+        Vector3f omega_world = R * omega_body; // rotate rates into earth frame
 
+        // store heading rate (yaw rate in world frame) in degrees/sec
+        _target_heading_rate_degs = degrees(omega_world.z);
     } else if (_offset_type == AP_FOLLOW_OFFSET_TYPE_RELATIVE) {
-#if AP_FOLLOW_DEBUG
-        if (do_dbg) {
-            GCS_SEND_TEXT(MAV_SEVERITY_WARNING, "AP_Follow FT reject: no attitude but OFS_TYPE=REL. caps=0x%08lx",
-                          (unsigned long)packet.est_capabilities);
-        }
-#endif
+        // if attitude unavailable and using relative frame, cannot compute — abort
         return false;
     } else {
+        // otherwise, default heading rate to zero
         _target_heading_rate_degs = 0.0f;
     }
 
-    // NEU -> NED (meters)
     _target_pos_ned_m.xy() = target_pos_neu_m.xy();
-    _target_pos_ned_m.z    = -target_pos_neu_m.z;
+    _target_pos_ned_m.z = -packet.alt + origin.alt * 0.01;
 
-    // Vel/accel are NED in m/s and m/s^2 if provided
-    if (packet.est_capabilities & (1U<<1)) {
-        _target_vel_ned_ms.x = packet.vel[0];
-        _target_vel_ned_ms.y = packet.vel[1];
-        _target_vel_ned_ms.z = packet.vel[2];
+    // decode velocity if available (bit 1 of est_capabilities)
+    if (packet.est_capabilities & (1<<1)) {
+        _target_vel_ned_ms.x = packet.vel[0]; // velocity north
+        _target_vel_ned_ms.y = packet.vel[1]; // velocity east
+        _target_vel_ned_ms.z = packet.vel[2]; // velocity down
     } else {
         _target_vel_ned_ms.zero();
     }
 
-    if (packet.est_capabilities & (1U<<2)) {
-        _target_accel_ned_mss.x = packet.acc[0];
-        _target_accel_ned_mss.y = packet.acc[1];
-        _target_accel_ned_mss.z = packet.acc[2];
+    // decode acceleration if available (bit 2 of est_capabilities)
+    if (packet.est_capabilities & (1 << 2)) {
+        _target_accel_ned_mss.x = packet.acc[0]; // acceleration north
+        _target_accel_ned_mss.y = packet.acc[1]; // acceleration east
+        _target_accel_ned_mss.z = packet.acc[2]; // acceleration down
     } else {
         _target_accel_ned_mss.zero();
     }
 
+    // apply jitter-corrected timestamp to this update
     _last_location_update_ms = _jitter.correct_offboard_timestamp_msec(packet.timestamp, AP_HAL::millis());
 
+    // if sysid not yet assigned, adopt sender's sysid and enable automatic sysid tracking
     if (_sysid == 0) {
         _sysid.set(msg.sysid);
         _automatic_sysid = true;
     }
 
+    // we are using follow_target: set sysid to sender's sysid
     _using_follow_target = true;
-
-#if AP_FOLLOW_DEBUG
-    if (do_dbg) {
-        GCS_SEND_TEXT(MAV_SEVERITY_INFO,
-                      "AP_Follow FT ok sysid=%u caps=0x%08lx hdg=%.1f hdgRate=%.2f vel=%.2f %.2f %.2f ts=%lu last_update_ms=%lu",
-                      (unsigned)msg.sysid,
-                      (unsigned long)packet.est_capabilities,
-                      (double)_target_heading_deg,
-                      (double)_target_heading_rate_degs,
-                      (double)_target_vel_ned_ms.x, (double)_target_vel_ned_ms.y, (double)_target_vel_ned_ms.z,
-                      (unsigned long)packet.timestamp,
-                      (unsigned long)_last_location_update_ms);
-    }
-#endif
 
     return true;
 }
@@ -1015,21 +802,22 @@ void AP_Follow::init_offsets_if_required()
         return;
     }
 
+    // Check if the target is within the maximum distance
     Vector3f current_position_ned_m;
-    if (!get_curr_pos_ned_m(current_position_ned_m)) {
+    if (!AP::ahrs().get_relative_position_NED_origin(current_position_ned_m)) {
         return;
     }
+    const Vector3f dist_vec_ned_m = (_target_pos_ned_m.tofloat() - current_position_ned_m);
 
-    // meters, NED
-    const Vector3f dist_vec_ned_m = (_target_pos_ned_m - current_position_ned_m);
-
-    if (_offset_type == AP_FOLLOW_OFFSET_TYPE_RELATIVE) {
-        // store in vehicle-relative (FRD-ish) by rotating opposite the heading
+    if ((_offset_type == AP_FOLLOW_OFFSET_TYPE_RELATIVE)) {
+        // rotate offset into vehicle-relative frame based on heading
         _offset_m.set(rotate_vector(-dist_vec_ned_m, -degrees(_estimate_heading_rad)));
         GCS_SEND_TEXT(MAV_SEVERITY_INFO, "Relative follow offset loaded");
     } else {
-        // store directly in NED meters
+        // initialize offset in NED frame (no heading rotation)
         _offset_m.set(-dist_vec_ned_m);
+
+        // ensure offset type is set to NED frame if initialized this way
         _offset_type.set(AP_FOLLOW_OFFSET_TYPE_NED);
         GCS_SEND_TEXT(MAV_SEVERITY_INFO, "N-E-D follow offset loaded");
     }
@@ -1070,21 +858,25 @@ void AP_Follow::clear_dist_and_bearing_to_target()
 void AP_Follow::update_dist_and_bearing_to_target()
 {
     Vector3f current_position_ned_m;
-    if (!get_curr_pos_ned_m(current_position_ned_m)) {
+    if (!AP::ahrs().get_relative_position_NED_origin(current_position_ned_m)) {
+        // if unable to retrieve local position, clear distance/bearing info
         clear_dist_and_bearing_to_target();
-        return;
+    } else {
+        // convert vehicle position to NED meters (NEU -> NED and cm -> m)
+        current_position_ned_m.z = -current_position_ned_m.z; // NEU to NED
+        current_position_ned_m *= 0.01;  // convert cm to m
+
+        // calculate distance vectors to target, both with and without offsets
+        const Vector3p ofs_dist_vec = _ofs_estimate_pos_ned_m - current_position_ned_m.topostype();
+
+        // record distance and bearing to target for reporting/logging
+        if (ofs_dist_vec.xy().is_zero()) {
+            clear_dist_and_bearing_to_target();
+        } else {
+            _dist_to_target_m = ofs_dist_vec.xy().length();
+            _bearing_to_target_deg = degrees(ofs_dist_vec.xy().angle());
+        }
     }
-
-    // current_position_ned_m is already NED in meters (do NOT flip Z, do NOT scale)
-    const Vector3f ofs_dist_vec = _ofs_estimate_pos_ned_m - current_position_ned_m;
-
-    if (ofs_dist_vec.xy().is_zero()) {
-        clear_dist_and_bearing_to_target();
-        return;
-    }
-
-    _dist_to_target_m = ofs_dist_vec.xy().length();
-    _bearing_to_target_deg = degrees(ofs_dist_vec.xy().angle());
 }
 
 
@@ -1102,7 +894,7 @@ void AP_Follow::Log_Write_FOLL()
     UNUSED_RESULT(get_target_location_and_velocity(loc_estimate, vel_estimate));
 
     Location target_location;
-    UNUSED_RESULT(AP::ahrs().get_location_from_origin_offset_NED(target_location, _target_pos_ned_m.topostype()));
+    UNUSED_RESULT(AP::ahrs().get_location_from_origin_offset_NED(target_location, _target_pos_ned_m));
 
     // log the lead target's reported position and vehicle's estimated position
     // @LoggerMessage: FOLL
@@ -1146,61 +938,14 @@ void AP_Follow::Log_Write_FOLL()
 // Returns true if following is enabled and a recent target update has been received.
 bool AP_Follow::have_target(void) const
 {
-#if AP_FOLLOW_DEBUG
-    static uint32_t last_dbg_ms = 0;
-    const bool do_dbg = ap_follow_dbg_rate_limit(last_dbg_ms);
-#endif
-
     if (!_enabled) {
-#if AP_FOLLOW_DEBUG
-        if (do_dbg) {
-            GCS_SEND_TEXT(MAV_SEVERITY_WARNING, "AP_Follow have_target=0 disabled");
-        }
-#endif
         return false;
     }
 
-    const uint32_t now = AP_HAL::millis();
-
-    if (_last_location_update_ms == 0) {
-#if AP_FOLLOW_DEBUG
-        if (do_dbg) {
-            GCS_SEND_TEXT(MAV_SEVERITY_WARNING, "AP_Follow have_target=0 last_update_ms=0 sysid=%u sysid_used=%u auto=%u usingFT=%u",
-                          (unsigned)_sysid.get(), (unsigned)_sysid_used,
-                          (unsigned)_automatic_sysid, (unsigned)_using_follow_target);
-        }
-#endif
+    // check for timeout
+    if ((_last_location_update_ms == 0) || ((AP_HAL::millis() - _last_location_update_ms) > (uint32_t)(_timeout * 1000.0f))) {
         return false;
     }
-
-    const uint32_t age_ms = now - _last_location_update_ms;
-    const uint32_t timeout_ms = (uint32_t)(_timeout * 1000.0f);
-
-    if (age_ms > timeout_ms) {
-#if AP_FOLLOW_DEBUG
-        if (do_dbg) {
-            GCS_SEND_TEXT(MAV_SEVERITY_WARNING, "AP_Follow have_target=0 timeout age_ms=%lu timeout_ms=%lu sysid=%u auto=%u usingFT=%u",
-                          (unsigned long)age_ms, (unsigned long)timeout_ms,
-                          (unsigned)_sysid.get(), (unsigned)_automatic_sysid, (unsigned)_using_follow_target);
-        }
-#endif
-        return false;
-    }
-
-#if AP_FOLLOW_DEBUG
-    if (do_dbg) {
-        const Vector3f ofs = _offset_m.get();
-        GCS_SEND_TEXT(MAV_SEVERITY_INFO, "AP_Follow have_target=1 age_ms=%lu sysid=%u auto=%u usingFT=%u ofs=%.1f %.1f %.1f ofsType=%u estValid=%u",
-                      (unsigned long)age_ms,
-                      (unsigned)_sysid.get(),
-                      (unsigned)_automatic_sysid,
-                      (unsigned)_using_follow_target,
-                      (double)ofs.x, (double)ofs.y, (double)ofs.z,
-                      (unsigned)_offset_type.get(),
-                      (unsigned)_estimate_valid);
-    }
-#endif
-
     return true;
 }
 

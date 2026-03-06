@@ -83,8 +83,25 @@ public:
     /// get default target climb speed in cm/s during missions
     float get_default_speed_up() const { return _wp_speed_up_cms; }
 
+    // Returns the default climb speed in m/s used during waypoint navigation.
+    // Derived from the WP_SPD_UP parameter.
+    float get_default_speed_up_ms() const { return _wp_speed_up_ms; }
+
     /// get default target descent rate in cm/s during missions.  Note: always positive
     float get_default_speed_down() const { return fabsf(_wp_speed_down_cms); }
+
+    // Returns the default descent rate in m/s used during waypoint navigation.
+    // Derived from the WP_SPD_DN parameter. Always positive.
+    float get_default_speed_down_ms() const { return fabsf(_wp_speed_down_ms); }
+
+    // Returns the vertical acceleration in cm/s² used during waypoint navigation.
+    // Always positive. See get_accel_D_mss() for full details.
+    float get_accel_D_cmss() const { return get_accel_D_mss() * 100.0; }
+
+        // Returns the vertical acceleration in m/s² used during waypoint navigation.
+    // Derived from the WP_ACC_Z parameter. Always positive.
+    float get_accel_D_mss() const { return _wp_accel_z_mss; }
+
 
     /// get_speed_z - returns target descent speed in cm/s during missions.  Note: always positive
     float get_accel_z() const { return _wp_accel_z_cmss; }
@@ -251,7 +268,9 @@ protected:
 
     // parameters
     AP_Float    _wp_speed_ms;       // default horizontal speed in m/s for waypoint navigation
+    AP_Float    _wp_speed_up_ms;    // default climb rate in m/s for waypoint navigation
     AP_Float    _wp_speed_cms;          // default maximum horizontal speed in cm/s during missions
+    AP_Float    _wp_speed_down_ms;  // default descent rate in m/s for waypoint navigation
     AP_Float    _wp_speed_up_cms;       // default maximum climb rate in cm/s
     AP_Float    _wp_speed_down_cms;     // default maximum descent rate in cm/s
     AP_Float    _wp_radius_cm;          // distance from a waypoint in cm that, when crossed, indicates the wp has been reached
@@ -259,6 +278,7 @@ protected:
     AP_Float    _wp_accel_mss;      // maximum horizontal acceleration in m/s² used during waypoint tracking
     AP_Float    _wp_accel_c_cmss;       // cornering acceleration in cm/s/s during missions
     AP_Float    _wp_accel_z_cmss;       // vertical acceleration in cm/s/s during missions
+    AP_Float    _wp_accel_z_mss;    // maximum vertical acceleration in m/s² used during climb or descent
     AP_Float    _wp_jerk;               // maximum jerk used to generate scurve trajectories in m/s/s/s
     AP_Float    _terrain_margin;        // terrain following altitude margin. vehicle will stop if distance from target altitude is larger than this margin
 

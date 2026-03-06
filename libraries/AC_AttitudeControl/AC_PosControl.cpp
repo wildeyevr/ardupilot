@@ -28,6 +28,7 @@ extern const AP_HAL::HAL& hal;
  # define POSCONTROL_VEL_XY_IMAX                1000.0f // horizontal velocity controller IMAX gain default
  # define POSCONTROL_VEL_XY_FILT_HZ             5.0f    // horizontal velocity controller input filter
  # define POSCONTROL_VEL_XY_FILT_D_HZ           5.0f    // horizontal velocity controller input filter for D
+
 #elif APM_BUILD_TYPE(APM_BUILD_ArduSub)
  // default gains for Sub
  # define POSCONTROL_POS_Z_P                    3.0f    // vertical position controller P gain default
@@ -50,6 +51,7 @@ extern const AP_HAL::HAL& hal;
  # define POSCONTROL_VEL_XY_FILT_D_HZ           5.0f    // horizontal velocity controller input filter for D
 #else
  // default gains for Copter / TradHeli
+# define POSCONTROL_D_ACC_P                    0.028f  // vertical acceleration controller P gain default
  # define POSCONTROL_POS_Z_P                    1.0f    // vertical position controller P gain default
  # define POSCONTROL_VEL_Z_P                    5.0f    // vertical velocity controller P gain default
  # define POSCONTROL_VEL_Z_IMAX                 1000.0f // vertical velocity controller IMAX gain default
@@ -68,6 +70,26 @@ extern const AP_HAL::HAL& hal;
  # define POSCONTROL_VEL_XY_IMAX                1000.0f // horizontal velocity controller IMAX gain default
  # define POSCONTROL_VEL_XY_FILT_HZ             5.0f    // horizontal velocity controller input filter
  # define POSCONTROL_VEL_XY_FILT_D_HZ           5.0f    // horizontal velocity controller input filter for D
+# define POSCONTROL_D_POS_P                    1.0f    // vertical position controller P gain default
+# define POSCONTROL_D_VEL_P                    5.0f    // vertical velocity controller P gain default
+# define POSCONTROL_D_VEL_IMAX                 10.0f   // vertical velocity controller IMAX gain default
+# define POSCONTROL_D_VEL_FILT_HZ              5.0f    // vertical velocity controller input filter
+# define POSCONTROL_D_VEL_FILT_D_HZ            5.0f    // vertical velocity controller input filter for D
+# define POSCONTROL_D_ACC_I                    0.1f    // vertical acceleration controller I gain default
+# define POSCONTROL_D_ACC_D                    0.0f    // vertical acceleration controller D gain default
+# define POSCONTROL_D_ACC_IMAX                 0.8f    // vertical acceleration controller IMAX gain default
+# define POSCONTROL_D_ACC_FILT_HZ              20.0f   // vertical acceleration controller input filter default
+# define POSCONTROL_D_ACC_DT                   0.0025f // vertical acceleration controller dt default
+# define POSCONTROL_NE_POS_P                   1.0f    // horizontal position controller P gain default
+# define POSCONTROL_NE_VEL_IMAX                10.0f   // horizontal velocity controller IMAX gain default
+# define POSCONTROL_NE_VEL_FILT_HZ             5.0f    // horizontal velocity controller input filter
+# define POSCONTROL_NE_VEL_FILT_D_HZ           5.0f    // horizontal velocity controller input filter for D
+# define POSCONTROL_NE_VEL_P                   0.7f    // horizontal velocity controller P gain default
+# define POSCONTROL_NE_VEL_I                   0.35f   // horizontal velocity controller I gain default
+# define POSCONTROL_NE_VEL_D                   0.17f   // horizontal velocity controller D gain default
+# define POSCONTROL_NE_VEL_IMAX                10.0f   // horizontal velocity controller IMAX gain default
+# define POSCONTROL_NE_VEL_FILT_HZ             5.0f    // horizontal velocity controller input filter
+# define POSCONTROL_NE_VEL_FILT_D_HZ           5.0f    // horizontal velocity controller input filter for D
 #endif
 
 // vibration compensation gains
@@ -347,7 +369,19 @@ AC_PosControl::AC_PosControl(AP_AHRS_View& ahrs, const AP_InertialNav& inav,
     _accel_max_xy_cmss(POSCONTROL_ACCEL_XY),
     _accel_max_z_cmss(POSCONTROL_ACCEL_Z),
     _jerk_max_xy_cmsss(POSCONTROL_JERK_XY * 100.0),
-    _jerk_max_z_cmsss(POSCONTROL_JERK_Z * 100.0)
+    _jerk_max_z_cmsss(POSCONTROL_JERK_Z * 100.0),
+    _p_pos_ne_m(POSCONTROL_NE_POS_P),
+    _p_pos_d_m(POSCONTROL_D_POS_P),
+    _pid_vel_ne_m(POSCONTROL_NE_VEL_P, POSCONTROL_NE_VEL_I, POSCONTROL_NE_VEL_D, 0.0f, POSCONTROL_NE_VEL_IMAX, POSCONTROL_NE_VEL_FILT_HZ, POSCONTROL_NE_VEL_FILT_D_HZ),
+    _pid_vel_d_m(POSCONTROL_D_VEL_P, 0.0f, 0.0f, 0.0f, POSCONTROL_D_VEL_IMAX, POSCONTROL_D_VEL_FILT_HZ, POSCONTROL_D_VEL_FILT_D_HZ),
+    _pid_accel_d_m(POSCONTROL_D_ACC_P, POSCONTROL_D_ACC_I, POSCONTROL_D_ACC_D, 0.0f, POSCONTROL_D_ACC_IMAX, 0.0f, POSCONTROL_D_ACC_FILT_HZ, 0.0f),
+    _vel_max_ne_ms(POSCONTROL_SPEED_MS),
+    _vel_max_up_ms(POSCONTROL_SPEED_UP_MS),
+    _vel_max_down_ms(POSCONTROL_SPEED_DOWN_MS),
+    _accel_max_ne_mss(POSCONTROL_ACCEL_NE_MSS),
+    _accel_max_d_mss(POSCONTROL_ACCEL_D_MSS),
+    _jerk_max_ne_msss(POSCONTROL_JERK_NE_MSSS),
+    _jerk_max_d_msss(POSCONTROL_JERK_D_MSSS)
 {
     AP_Param::setup_object_defaults(this, var_info);
 
@@ -452,6 +486,32 @@ void AC_PosControl::set_max_speed_accel_xy(float speed_cms, float accel_cmss)
     }
 }
 
+// Sets maximum horizontal speed (m/s) and acceleration (m/s²) for NE-axis shaping.
+// These values constrain the kinematic trajectory used by the lateral controller.
+// All arguments should be positive.
+void AC_PosControl::NE_set_max_speed_accel_m(float speed_ne_ms, float accel_ne_mss)
+{
+    _vel_max_ne_ms = fabsf(speed_ne_ms);
+    _accel_max_ne_mss = fabsf(accel_ne_mss);
+
+    // ensure the horizontal jerk is less than the vehicle is capable of
+    const float jerk_max_msss = MIN(_attitude_control.get_ang_vel_roll_max_rads(), _attitude_control.get_ang_vel_pitch_max_rads()) * GRAVITY_MSS;
+    const float snap_max_mssss = MIN(_attitude_control.get_accel_roll_max_radss(), _attitude_control.get_accel_pitch_max_radss()) * GRAVITY_MSS;
+
+    // get specified jerk limit
+    _jerk_max_ne_msss = _shaping_jerk_ne_msss;
+
+    // limit maximum jerk based on maximum angular rate
+    if (is_positive(jerk_max_msss) && _attitude_control.get_bf_feedforward()) {
+        _jerk_max_ne_msss = MIN(_jerk_max_ne_msss, jerk_max_msss);
+    }
+
+    // limit maximum jerk to maximum possible average jerk based on angular acceleration
+    if (is_positive(snap_max_mssss) && _attitude_control.get_bf_feedforward()) {
+        _jerk_max_ne_msss = MIN(0.5 * safe_sqrt(_accel_max_ne_mss * snap_max_mssss), _jerk_max_ne_msss);
+    }
+}
+
 /// set_max_speed_accel_xy - set the position controller correction velocity and acceleration limit
 ///     This should be done only during initialisation to avoid discontinuities
 void AC_PosControl::set_correction_speed_accel_xy(float speed_cms, float accel_cmss)
@@ -498,6 +558,53 @@ void AC_PosControl::soften_for_landing_xy()
     // Prevent I term build up in xy velocity controller.
     // Note that this flag is reset on each loop in update_xy_controller()
     set_externally_limited_xy();
+}
+
+// Fully initializes the NE controller with current position, velocity, acceleration, and attitude.
+// Intended for normal startup when the full state is known.
+// Private function shared by other NE initializers.
+void AC_PosControl::NE_init_controller()
+{
+    // initialise offsets to target offsets and ensure offset targets are zero if they have not been updated.
+    NE_init_offsets();
+
+    // set roll, pitch lean angle targets to current attitude
+    const Vector3f &att_target_euler_rad = _attitude_control.get_att_target_euler_rad();
+    _roll_target_rad = att_target_euler_rad.x;
+    _pitch_target_rad = att_target_euler_rad.y;
+    _yaw_target_rad = att_target_euler_rad.z; // todo: this should be thrust vector heading, not yaw.
+    _yaw_rate_target_rads = 0.0f;
+    _angle_max_override_rad = 0.0;
+
+    _pos_target_ned_m.xy() = _pos_estimate_ned_m.xy();
+    _pos_desired_ned_m.xy() = _pos_target_ned_m.xy() - _pos_offset_ned_m.xy();
+
+    _vel_target_ned_ms.xy() = _vel_estimate_ned_ms.xy();
+    _vel_desired_ned_ms.xy() = _vel_target_ned_ms.xy() - _vel_offset_ned_ms.xy();
+
+    // Set desired acceleration to zero because raw acceleration is prone to noise
+    _accel_desired_ned_mss.xy().zero();
+
+    if (!NE_is_active()) {
+        lean_angles_to_accel_NE_mss(_accel_target_ned_mss.x, _accel_target_ned_mss.y);
+    }
+
+    // limit acceleration using maximum lean angles
+    const float angle_max_rad = MIN(_attitude_control.get_althold_lean_angle_max_rad(), get_lean_angle_max_rad());
+    const float accel_max_mss = angle_rad_to_accel_mss(angle_max_rad);
+    _accel_target_ned_mss.xy().limit_length(accel_max_mss);
+
+    // initialise I terms from lean angles
+    _pid_vel_ne_m.reset_filter();
+    // initialise the I term to (_accel_target_ned_mss - _accel_desired_ned_mss)
+    // _accel_desired_ned_mss is zero and can be removed from the equation
+    _pid_vel_ne_m.set_integrator((_accel_target_ned_mss.xy() - _vel_target_ned_ms.xy() * _pid_vel_ne_m.ff()));
+
+    // initialise ekf xy reset handler
+    NE_init_ekf_reset();
+
+    // initialise z_controller time out
+    _last_update_ne_ticks = AP::scheduler().ticks32();
 }
 
 /// init_xy_controller - initialise the position controller to the current position, velocity, acceleration and attitude.
@@ -703,8 +810,10 @@ void AC_PosControl::update_xy_controller()
     _accel_target.xy() += _accel_desired.xy() + _accel_offset.xy();
 
     // limit acceleration using maximum lean angles
+    const float angle_max_rad = MIN(_attitude_control.get_althold_lean_angle_max_rad(), get_lean_angle_max_rad());
     float angle_max = MIN(_attitude_control.get_althold_lean_angle_max_cd(), get_lean_angle_max_cd());
     float accel_max = angle_to_accel(angle_max * 0.01) * 100;
+    const float accel_max_mss = angle_rad_to_accel_mss(angle_max_rad);
     // Define the limit vector before we constrain _accel_target 
     _limit_vector.xy() = _accel_target.xy();
     if (!limit_accel_xy(_vel_desired.xy(), _accel_target.xy(), accel_max)) {
@@ -764,6 +873,41 @@ void AC_PosControl::set_max_speed_accel_z(float speed_down, float speed_up, floa
     }
 }
 
+// Sets maximum climb/descent rate (m/s) and vertical acceleration (m/s²) for the U-axis.
+// These values are used for jerk-limited kinematic shaping of the vertical trajectory.
+// All values must be positive.
+void AC_PosControl::D_set_max_speed_accel_m(float decent_speed_max_ms, float climb_speed_max_ms, float accel_max_d_mss)
+{
+    // sanity check and update
+    if (!is_zero(decent_speed_max_ms)) {
+        _vel_max_down_ms = fabsf(decent_speed_max_ms);
+    }
+    if (!is_zero(climb_speed_max_ms)) {
+        _vel_max_up_ms = fabsf(climb_speed_max_ms);
+    }
+    if (!is_zero(accel_max_d_mss)) {
+        _accel_max_d_mss = fabsf(accel_max_d_mss);
+    }
+
+    // ensure the vertical Jerk is not limited by the filters in the Z acceleration PID object
+    _jerk_max_d_msss = _shaping_jerk_d_msss;
+    if (is_positive(_pid_accel_d_m.filt_T_hz())) {
+        _jerk_max_d_msss = MIN(_jerk_max_d_msss, MIN(GRAVITY_MSS, _accel_max_d_mss) * (M_2PI * _pid_accel_d_m.filt_T_hz()) / 5.0);
+    }
+    if (is_positive(_pid_accel_d_m.filt_E_hz())) {
+        _jerk_max_d_msss = MIN(_jerk_max_d_msss, MIN(GRAVITY_MSS, _accel_max_d_mss) * (M_2PI * _pid_accel_d_m.filt_E_hz()) / 5.0);
+    }
+}
+
+// Sets vertical correction velocity and acceleration limits (m/s, m/s²).
+// These values constrain the correction output of the PID controller.
+// All values must be positive.
+void AC_PosControl::D_set_correction_speed_accel_m(float decent_speed_max_ms, float climb_speed_max_ms, float accel_max_d_mss)
+{
+    // define maximum position error and maximum first and second differential limits
+    _p_pos_d_m.set_limits(-fabsf(decent_speed_max_ms), fabsf(climb_speed_max_ms), fabsf(accel_max_d_mss), 0.0f);
+}
+
 /// set_correction_speed_accel_z - set the position controller correction velocity and acceleration limit
 ///     speed_down can be positive or negative but will always be interpreted as a descent speed.
 ///     This should be done only during initialisation to avoid discontinuities
@@ -816,6 +960,45 @@ void AC_PosControl::relax_z_controller(float throttle_setting)
     // init_z_controller has set the accel PID I term to generate the current throttle set point
     // Use relax_integrator to decay the throttle set point to throttle_setting
     _pid_accel_z.relax_integrator((throttle_setting - _motors.get_throttle_hover()) * 1000.0f, _dt, POSCONTROL_RELAX_TC);
+}
+
+// Fully initializes the U-axis controller with current position, velocity, acceleration, and attitude.
+// Used during standard controller activation when full state is known.
+// Private function shared by other vertical initializers.
+void AC_PosControl::D_init_controller()
+{
+    // initialise terrain targets and offsets to zero
+    init_terrain();
+
+    // initialise offsets to target offsets and ensure offset targets are zero if they have not been updated.
+    D_init_offsets();
+
+    _pos_target_ned_m.z = _pos_estimate_ned_m.z;
+    _pos_desired_ned_m.z = _pos_target_ned_m.z - _pos_offset_ned_m.z;
+
+    _vel_target_ned_ms.z = _vel_estimate_ned_ms.z;
+    _vel_desired_ned_ms.z = _vel_target_ned_ms.z - _vel_offset_ned_ms.z;
+
+    // Reset I term of velocity PID
+    _pid_vel_d_m.reset_filter();
+    _pid_vel_d_m.set_integrator(0.0f);
+
+    _accel_target_ned_mss.z = constrain_float(get_estimated_accel_D_mss(), -_accel_max_d_mss, _accel_max_d_mss);
+    _accel_desired_ned_mss.z = _accel_target_ned_mss.z - (_accel_offset_ned_mss.z + _accel_terrain_d_mss);
+    _pid_accel_d_m.reset_filter();
+
+    // Set acceleration PID I term based on the current throttle
+    // Remove the expected P term due to _accel_desired_ned_mss.z being constrained to _accel_max_d_mss
+    // Remove the expected FF term due to non-zero _accel_target_ned_mss.z
+    _pid_accel_d_m.set_integrator(-(_attitude_control.get_throttle_in() - _motors.get_throttle_hover())
+        - _pid_accel_d_m.kP() * (_accel_target_ned_mss.z - get_estimated_accel_D_mss())
+        - _pid_accel_d_m.ff() * _accel_target_ned_mss.z);
+
+    // initialise ekf z reset handler
+    D_init_ekf_reset();
+
+    // initialise z_controller time out
+    _last_update_d_ticks = AP::scheduler().ticks32();
 }
 
 /// init_z_controller - initialise the position controller to the current position, velocity, acceleration and attitude.
@@ -1146,6 +1329,27 @@ void AC_PosControl::init_pos_terrain_cm(float pos_terrain_cm)
 
 /// Offsets
 
+// Initializes NE position/velocity/acceleration offsets to match their respective targets.
+void AC_PosControl::NE_init_offsets()
+{
+    // check for offset target timeout
+    uint32_t now_ms = AP_HAL::millis();
+    if (now_ms - _posvelaccel_offset_target_ne_ms > POSCONTROL_POSVELACCEL_OFFSET_TARGET_TIMEOUT_MS) {
+        _pos_offset_target_ned_m.xy().zero();
+        _vel_offset_target_ned_ms.xy().zero();
+        _accel_offset_target_ned_mss.xy().zero();
+    }
+
+    // set position offset to target
+    _pos_offset_ned_m.xy() = _pos_offset_target_ned_m.xy();
+
+    // set velocity offset to target
+    _vel_offset_ned_ms.xy() = _vel_offset_target_ned_ms.xy();
+
+    // set acceleration offset to target
+    _accel_offset_ned_mss.xy() = _accel_offset_target_ned_mss.xy();
+}
+
 /// set the horizontal position, velocity and acceleration offsets in cm, cms and cm/s/s from EKF origin in NE frame
 /// this is used to initiate the offsets when initialise the position controller or do an offset reset
 void AC_PosControl::init_offsets_xy()
@@ -1399,6 +1603,25 @@ float AC_PosControl::crosstrack_error() const
     }
 }
 
+#if APM_BUILD_TYPE(APM_BUILD_ArduPlane)
+    // Returns true if the requested forward pitch is limited by the configured tilt constraint.
+bool AC_PosControl::get_fwd_pitch_is_limited() const
+{
+    if (_limit_vector_ned.xy().is_zero()) {
+        return false;
+    }
+    const float angle_max_rad = MIN(_attitude_control.get_althold_lean_angle_max_rad(), get_lean_angle_max_rad());
+    const float accel_max_mss = angle_rad_to_accel_mss(angle_max_rad);
+    // Check for pitch limiting in the forward direction
+    const float accel_fwd_unlimited_mss = _limit_vector_ned.x * _ahrs.cos_yaw() + _limit_vector_ned.y * _ahrs.sin_yaw();
+    const float pitch_target_unlimited_deg = accel_mss_to_angle_deg(- MIN(accel_fwd_unlimited_mss, accel_max_mss));
+    const float accel_fwd_limited = _accel_target_ned_mss.x * _ahrs.cos_yaw() + _accel_target_ned_mss.y * _ahrs.sin_yaw();
+    const float pitch_target_limited_deg = accel_mss_to_angle_deg(- accel_fwd_limited);
+
+    return is_negative(pitch_target_unlimited_deg) && pitch_target_unlimited_deg < pitch_target_limited_deg;
+}
+#endif // APM_BUILD_TYPE(APM_BUILD_ArduPlane)
+
 ///
 /// private methods
 ///
@@ -1495,6 +1718,13 @@ void AC_PosControl::init_ekf_xy_reset()
 {
     Vector2f pos_shift;
     _ekf_xy_reset_ms = _ahrs.getLastPosNorthEastReset(pos_shift);
+}
+
+// Initializes tracking of NE EKF position resets.
+void AC_PosControl::NE_init_ekf_reset()
+{
+    Vector2f pos_shift;
+    _ekf_ne_reset_ms = _ahrs.getLastPosNorthEastReset(pos_shift);
 }
 
 /// handle_ekf_xy_reset - check for ekf position reset and adjust loiter or brake target position

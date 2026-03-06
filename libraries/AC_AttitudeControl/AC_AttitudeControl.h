@@ -351,6 +351,10 @@ public:
     // Return tilt angle limit for pilot input that prioritises altitude hold over lean angle
     virtual float get_althold_lean_angle_max_cd() const;
 
+    // Returns maximum allowable tilt angle (in radians) for pilot input when in altitude hold mode.
+    // Used to limit lean angle based on available thrust margin, prioritising altitude stability.
+    virtual float get_althold_lean_angle_max_rad() const;
+
     // Return configured tilt angle limit in centidegrees
     float lean_angle_max_cd() const { return _aparm.angle_max; }
 
@@ -580,6 +584,9 @@ protected:
     // Specifies whether the attitude controller should use the square root controller in the attitude correction.
     // This is used during Autotune to ensure the P term is tuned without being influenced by the acceleration limit of the square root controller.
     bool                _use_sqrt_controller;
+
+    // Filtered Alt_Hold lean angle max - used to limit lean angle when throttle is saturated using Alt_Hold
+    float               _althold_lean_angle_max_rad = 0.0f;
 
     // Filtered Alt_Hold lean angle max - used to limit lean angle when throttle is saturated using Alt_Hold
     float               _althold_lean_angle_max = 0.0f;

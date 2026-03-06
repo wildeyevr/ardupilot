@@ -162,6 +162,10 @@ float input_expo(float input, float expo);
 // angle_to_accel converts a maximum lean angle in degrees to an accel limit in m/s/s
 float angle_to_accel(float angle_deg);
 
+// Converts a lean angle (radians) to horizontal acceleration in m/s².
+// Assumes flat Earth and small angle approximation: a = g * tan(θ)
+float angle_rad_to_accel_mss(float angle_rad);
+
 // accel_to_angle converts a maximum accel in m/s/s to a lean angle in degrees
 float accel_to_angle(float accel);
 

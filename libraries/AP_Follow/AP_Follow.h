@@ -84,7 +84,7 @@ public:
     void update_estimates();
 
     // Retrieves the estimated target position, velocity, and acceleration in the NED frame relative to the origin (units: meters and meters/second).
-    bool get_target_pos_vel_accel_NED_m(Vector3p &pos_ned_m, Vector3f &vel_ned_ms, Vector3f &accel_ned_mss) const;
+    bool get_target_pos_vel_accel_NED_m(Vector3f &pos_ned_m, Vector3f &vel_ned_ms, Vector3f &accel_ned_mss) const;
 
     // Retrieves the estimated target position, velocity, and acceleration in the NED frame, including configured positional offsets.
     bool get_ofs_pos_vel_accel_NED_m(Vector3p &pos_ofs_ned_m, Vector3f &vel_ofs_ned_ms, Vector3f &accel_ofs_ned_mss) const;

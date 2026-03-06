@@ -349,13 +349,13 @@ void AP_Follow::update_estimates()
 //==============================================================================
 
 // Retrieves the estimated target position, velocity, and acceleration in the NED frame (relative to origin).
-bool AP_Follow::get_target_pos_vel_accel_NED_m(Vector3p &pos_ned_m, Vector3f &vel_ned_ms, Vector3f &accel_ned_mss) const
+bool AP_Follow::get_target_pos_vel_accel_NED_m(Vector3f &pos_ned_m, Vector3f &vel_ned_ms, Vector3f &accel_ned_mss) const
 {
     if (!_estimate_valid) {
         return false;
     }
 
-    pos_ned_m = _estimate_pos_ned_m;
+    pos_ned_m = _estimate_pos_ned_m.tofloat();
     vel_ned_ms = _estimate_vel_ned_ms;
     accel_ned_mss = _estimate_accel_ned_mss;
 

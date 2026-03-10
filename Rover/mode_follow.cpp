@@ -36,11 +36,11 @@ void ModeFollow::update()
     Vector3f vel_of_target; // velocity of lead vehicle
 
     // if no target simply stop the vehicle
-    if (!g2.follow.get_target_dist_and_vel_ned(dist_vec, dist_vec_offs, vel_of_target)) {
-        _reached_destination = true;
-        stop_vehicle();
-        return;
-    }
+   // if (!g2.follow.get_target_dist_and_vel_ned(dist_vec, dist_vec_offs, vel_of_target)) {
+      //  _reached_destination = true;
+      //  stop_vehicle();
+       // return;
+   // }
 
     // calculate desired velocity vector
     Vector2f desired_velocity_ne;
@@ -77,13 +77,15 @@ void ModeFollow::update()
 // return desired heading (in degrees) for reporting to ground station (NAV_CONTROLLER_OUTPUT message)
 float ModeFollow::wp_bearing() const
 {
-    return g2.follow.get_bearing_to_target();
+    //return g2.follow.get_bearing_to_target();
+    return 0;
 }
 
 // return distance (in meters) to destination
 float ModeFollow::get_distance_to_destination() const
 {
-    return g2.follow.get_distance_to_target();
+    //return g2.follow.get_distance_to_target();
+    return 0;
 }
 
 // set desired speed in m/s

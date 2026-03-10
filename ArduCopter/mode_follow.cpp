@@ -13,8 +13,17 @@
  *  - AP_Follow provides target state in NED meters (pos), m/s (vel), m/s^2 (accel)
  *  - AC_PosControl expects NEU centimeters (pos), cm/s (vel), cm/s/s (accel)
  *  - AC_PosControl input_*_xy() takes pos and vel by NON-const reference (it may modify them)
- *  - MUST call g2.follow.update_estimates() each loop (you already discovered this!)
+ *  - MUST call g2.follow.update_estimates() each loop
+ *
+ * Current demo-oriented tuning:
+ *  - position-only follow input (vel/accel feedforward disabled)
+ *  - manual pilot yaw in YAW_BEHAVE_NONE with deadband + heading latch
  */
+
+// manual yaw state for YAW_BEHAVE_NONE
+static float follow_manual_yaw_target_rad = 0.0f;
+static bool  follow_manual_yaw_init = false;
+static bool  follow_manual_yaw_was_active = false;
 
 // Return true if this mode is enabled, used by MAVLink available modes
 bool ModeFollow::enabled() const
@@ -58,6 +67,12 @@ bool ModeFollow::init(const bool ignore_checks)
     auto_yaw.set_mode_to_default(false);
     // Force yaw control to accept external yaw targets in Follow
     auto_yaw.set_mode(AutoYaw::Mode::HOLD);
+
+    // initialise manual yaw hold target
+    follow_manual_yaw_target_rad = ahrs.get_yaw();
+    follow_manual_yaw_init = true;
+    follow_manual_yaw_was_active = false;
+
     return true;
 }
 
@@ -65,6 +80,8 @@ bool ModeFollow::init(const bool ignore_checks)
 void ModeFollow::exit()
 {
     g2.follow.clear_offsets_if_required();
+    follow_manual_yaw_init = false;
+    follow_manual_yaw_was_active = false;
 }
 
 void ModeFollow::run()
@@ -72,7 +89,11 @@ void ModeFollow::run()
     // debug rate limit
     static uint32_t last_dbg_ms = 0;
     const uint32_t now_ms = AP_HAL::millis();
+#if FOLLOW_DEBUG_HZ > 0
     const bool do_dbg = (now_ms - last_dbg_ms) >= (1000U / FOLLOW_DEBUG_HZ);
+#else
+    const bool do_dbg = false;
+#endif
     if (do_dbg) {
         last_dbg_ms = now_ms;
     }
@@ -83,17 +104,40 @@ void ModeFollow::run()
         return;
     }
 
-    // IMPORTANT: update AP_Follow internal estimate every loop
-    g2.follow.update_estimates();
-
-    // Initialize follow offset if not yet set (prevents starting on top of lead)
+    // Initialize follow offset if not yet set.
+    // Prevents vehicle from starting directly on top of the lead vehicle.
     g2.follow.init_offsets_if_required();
+
+    // IMPORTANT for 4.6.x backport: update AP_Follow internal estimate every loop
+    // Do this AFTER offsets are initialized so the estimate uses the correct relative offset
+    g2.follow.update_estimates();
 
     // set motors to full range
     motors->set_desired_spool_state(AP_Motors::DesiredSpoolState::THROTTLE_UNLIMITED);
 
     float yaw_rad = attitude_control->get_att_target_euler_rad().z;
     float yaw_rate_rads = 0.0f;
+
+    // safe dt for manual yaw integration
+    float dt = pos_control->get_dt();
+    if (!is_positive(dt) || dt > 0.1f) {
+        dt = 0.01f;
+    }
+
+    // pilot yaw input
+    const float pilot_yaw_rate_cds_raw = get_pilot_desired_yaw_rate();
+    float pilot_yaw_rate_rads = radians(pilot_yaw_rate_cds_raw * 0.01f);
+
+    // deadband to prevent slow residual yaw creep after stick release
+    if (fabsf(pilot_yaw_rate_rads) < radians(5.0f)) {
+        pilot_yaw_rate_rads = 0.0f;
+    }
+    const bool pilot_yaw_active = fabsf(pilot_yaw_rate_rads) > 0.0f;
+
+    if (!follow_manual_yaw_init) {
+        follow_manual_yaw_target_rad = ahrs.get_yaw();
+        follow_manual_yaw_init = true;
+    }
 
     // --- Get target in NED (meters, m/s, m/s^2) from AP_Follow ---
     Vector3p pos_ofs_ned_p;     // position of lead + offset (NED, meters)
@@ -128,14 +172,20 @@ void ModeFollow::run()
         Vector2f vel_ne_cms;           // NON-const lvalue (AC_PosControl may modify)
         vel_ne_cms.x = vel_ofs_ned_ms.x * 100.0f;
         vel_ne_cms.y = vel_ofs_ned_ms.y * 100.0f;
+        //vel_ne_cms.x = 0.0f;
+        //vel_ne_cms.y = 0.0f;
 
-        const Vector2f accel_ne_cmss(accel_ofs_ned_mss.x * 100.0f,
-                                     accel_ofs_ned_mss.y * 100.0f);
+        //const Vector2f accel_ne_cmss(accel_ofs_ned_mss.x * 100.0f, accel_ofs_ned_mss.y * 100.0f);
+        const Vector2f accel_ne_cmss(0.0f, 0.0f);
 
         // Z pos/vel/accel in Up, cm-based
         float pos_up_cm   = (-pos_ofs_ned_m.z) * 100.0f;       // NON-const lvalue
-        float vel_up_cms  = (-vel_ofs_ned_ms.z) * 100.0f;      // NON-const lvalue
+
+        float vel_up_cms  = (-vel_ofs_ned_ms.z) * 100.0f;     // NON-const lvalue
+        //float vel_up_cms  = 0.0f;
+
         const float accel_up_cmss = (-accel_ofs_ned_mss.z) * 100.0f;
+        //const float accel_up_cmss = 0.0f;
 
         // Feed into AC_PosControl
         pos_control->input_pos_vel_accel_xy(pos_ne_cm, vel_ne_cms, accel_ne_cmss, false);
@@ -171,21 +221,15 @@ void ModeFollow::run()
                 (double)target_heading_deg,
                 (double)target_heading_rate_degs
             );
-        }
 
-        if (do_dbg) {
-            bool ok_hdg = g2.follow.get_target_heading_deg(target_heading_deg);
-            bool ok_hr  = g2.follow.get_target_heading_rate_degs(target_heading_rate_degs);
-
-            gcs().send_text(MAV_SEVERITY_INFO,
-                            "FOLL yaw dbg: yawBeh=%u okHdg=%u hdg=%.1f okRate=%u hdgRate=%.2f",
-                            (unsigned)g2.follow.get_yaw_behave(),
-                            (unsigned)ok_hdg, (double)target_heading_deg,
-                            (unsigned)ok_hr,  (double)target_heading_rate_degs);
-
-            gcs().send_text(MAV_SEVERITY_INFO,
-                            "FOLL yaw dbg: curYaw=%.1fdeg",
-                            (double)degrees(ahrs.get_yaw()));
+            gcs().send_text(
+                MAV_SEVERITY_INFO,
+                "FOLL yaw dbg: curYaw=%.1fdeg pilotYawRate=%.2fdeg/s holdYaw=%.1fdeg active=%u",
+                (double)degrees(ahrs.get_yaw()),
+                (double)degrees(pilot_yaw_rate_rads),
+                (double)degrees(follow_manual_yaw_target_rad),
+                (unsigned)pilot_yaw_active
+            );
         }
 
         // Yaw behavior
@@ -207,22 +251,40 @@ void ModeFollow::run()
                         }
                     }
                 }
+                yaw_rate_rads = 0.0f;
+                follow_manual_yaw_was_active = false;
                 break;
             }
 
             case AP_Follow::YAW_BEHAVE_SAME_AS_LEAD_VEHICLE:
                 yaw_rad = radians(target_heading_deg);
-                yaw_rate_rads = radians(target_heading_rate_degs);
+                yaw_rate_rads = 0.0f;
+                follow_manual_yaw_was_active = false;
                 break;
 
             case AP_Follow::YAW_BEHAVE_DIR_OF_FLIGHT:
                 if (vel_ofs_ned_ms.xy().length_squared() > 0.25f) { // ~0.5m/s
                     yaw_rad = vel_ofs_ned_ms.xy().angle();
                 }
+                yaw_rate_rads = 0.0f;
+                follow_manual_yaw_was_active = false;
                 break;
 
             case AP_Follow::YAW_BEHAVE_NONE:
             default:
+                if (pilot_yaw_active) {
+                    if (!follow_manual_yaw_was_active) {
+                        follow_manual_yaw_target_rad = ahrs.get_yaw();
+                        follow_manual_yaw_was_active = true;
+                    }
+                    follow_manual_yaw_target_rad = wrap_PI(follow_manual_yaw_target_rad + pilot_yaw_rate_rads * dt);
+                    yaw_rad = follow_manual_yaw_target_rad;
+                    yaw_rate_rads = pilot_yaw_rate_rads;
+                } else {
+                    follow_manual_yaw_was_active = false;
+                    yaw_rad = follow_manual_yaw_target_rad;
+                    yaw_rate_rads = 0.0f;
+                }
                 break;
         }
 
@@ -237,7 +299,20 @@ void ModeFollow::run()
         float accel_up_zero = 0.0f;
         pos_control->input_vel_accel_z(vel_up_zero, accel_up_zero, false);
 
-        yaw_rate_rads = 0.0f;
+        // still allow manual yaw hold behavior if no target
+        if (pilot_yaw_active) {
+            if (!follow_manual_yaw_was_active) {
+                follow_manual_yaw_target_rad = ahrs.get_yaw();
+                follow_manual_yaw_was_active = true;
+            }
+            follow_manual_yaw_target_rad = wrap_PI(follow_manual_yaw_target_rad + pilot_yaw_rate_rads * dt);
+            yaw_rad = follow_manual_yaw_target_rad;
+            yaw_rate_rads = pilot_yaw_rate_rads;
+        } else {
+            follow_manual_yaw_was_active = false;
+            yaw_rad = follow_manual_yaw_target_rad;
+            yaw_rate_rads = 0.0f;
+        }
 
         if (do_dbg) {
             gcs().send_text(MAV_SEVERITY_WARNING, "FOLL no target -> hold (zero vel/accel)");
@@ -268,7 +343,8 @@ void ModeFollow::run()
         pos_control->get_thrust_vector(),
         yaw_cd,
         yaw_rate_cds
-    );}
+    );
+}
 
 float ModeFollow::wp_distance_m() const
 {

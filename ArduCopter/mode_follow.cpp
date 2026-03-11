@@ -70,12 +70,7 @@ void ModeFollow::exit()
 void ModeFollow::run()
 {
     // debug rate limit
-    static uint32_t last_dbg_ms = 0;
-    const uint32_t now_ms = AP_HAL::millis();
-    const bool do_dbg = (now_ms - last_dbg_ms) >= (1000U / FOLLOW_DEBUG_HZ);
-    if (do_dbg) {
-        last_dbg_ms = now_ms;
-    }
+    const bool do_dbg = false;
 
     // if not armed set throttle to zero and exit immediately
     if (is_disarmed_or_landed()) {

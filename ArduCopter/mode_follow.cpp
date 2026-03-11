@@ -32,15 +32,19 @@ bool ModeFollow::init(const bool ignore_checks)
 
 #if HAL_MOUNT_ENABLED
     AP_Mount *mount = AP_Mount::get_singleton();
-    // follow the lead vehicle using sysid
     if (g2.follow.option_is_enabled(AP_Follow::Option::MOUNT_FOLLOW_ON_ENTER) && mount != nullptr) {
         mount->set_target_sysid(g2.follow.get_target_sysid());
     }
 #endif
 
-    // initialise horizontal speed, acceleration
-    pos_control->set_max_speed_accel_xy(wp_nav->get_default_speed_xy(), wp_nav->get_wp_acceleration());
-    pos_control->set_correction_speed_accel_xy(wp_nav->get_default_speed_xy(), wp_nav->get_wp_acceleration());
+    const float xy_speed = wp_nav->get_default_speed_xy();
+    const float xy_accel = wp_nav->get_wp_acceleration();
+
+    // nominal horizontal shaping
+    pos_control->set_max_speed_accel_xy(xy_speed, xy_accel);
+
+    // stronger correction for firmer stop / less float
+    pos_control->set_correction_speed_accel_xy(xy_speed, xy_accel * 1.5f);
 
     // initialize vertical speeds and acceleration
     pos_control->set_max_speed_accel_z(wp_nav->get_default_speed_down(),
@@ -56,7 +60,6 @@ bool ModeFollow::init(const bool ignore_checks)
 
     // initialise yaw
     auto_yaw.set_mode_to_default(false);
-    // Force yaw control to accept external yaw targets in Follow
     auto_yaw.set_mode(AutoYaw::Mode::HOLD);
     return true;
 }
@@ -164,7 +167,13 @@ void ModeFollow::run()
         Vector3f use_accel_ofs_ned_mss = accel_ofs_ned_mss;
 
         if (hold_active) {
+            // Sticky XY from held target
             use_pos_ofs_ned_m = held_pos_ofs_ned_m;
+
+            // let altitude target track live follow Z
+            use_pos_ofs_ned_m.z = pos_ofs_ned_m.z;
+
+            // Keep hold behavior otherwise
             use_vel_ofs_ned_ms.zero();
             use_accel_ofs_ned_mss.zero();
         }

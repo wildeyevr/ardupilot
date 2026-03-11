@@ -95,6 +95,11 @@ void ModeFollow::run()
     float yaw_rad = attitude_control->get_att_target_euler_rad().z;
     float yaw_rate_rads = 0.0f;
 
+    // --- Stationary deadband state ---
+    static bool hold_active = false;
+    static Vector3f held_pos_ofs_ned_m{};     // meters, NED
+    //static uint32_t hold_enter_ms = 0;
+
     // --- Get target in NED (meters, m/s, m/s^2) from AP_Follow ---
     Vector3p pos_ofs_ned_p;     // position of lead + offset (NED, meters)
     Vector3f vel_ofs_ned_ms;    // velocity (NED, m/s)
@@ -120,22 +125,71 @@ void ModeFollow::run()
 
         const Vector3f pos_ofs_ned_m = pos_ofs_ned_p.tofloat();
 
+                // ------------------------------------------------------------
+        // Stationary deadband / "sticky target" to prevent GPS wander chase
+        // ------------------------------------------------------------
+        const float STATIONARY_VEL_MS = 0.1f;   // lead considered stopped below this
+        const float DEADBAND_M        = 0.75f;   // don't chase target jitter within this radius
+        const float REACQUIRE_M       = 1.25f;   // hysteresis radius to drop hold (>= DEADBAND_M)
+
+        const float lead_speed = vel_ofs_ned_ms.xy().length(); // m/s (use lead+ofs vel)
+        const bool lead_stationary = (lead_speed < STATIONARY_VEL_MS);
+
+        if (!hold_active) {
+            // Enter hold when lead stationary
+            if (lead_stationary) {
+                hold_active = true;
+                //hold_enter_ms = now_ms;
+                held_pos_ofs_ned_m = pos_ofs_ned_m;
+            }
+        } else {
+            // Exit hold when lead moving again
+            if (!lead_stationary) {
+                hold_active = false;
+            } else {
+                // If target moves significantly, update held target (or optionally exit hold)
+                const float err_m = (pos_ofs_ned_m.xy() - held_pos_ofs_ned_m.xy()).length();
+
+                if (err_m > REACQUIRE_M) {
+                    // big jump: snap hold point to new target
+                    held_pos_ofs_ned_m = pos_ofs_ned_m;
+                } else if (err_m > DEADBAND_M) {
+                    // moderate drift: slowly walk the held point toward it (optional smoothing)
+                    // If you want hard deadband, comment this block and keep held_pos fixed.
+                    const float alpha = 0.1f; // 0..1, small = very "balloon"
+                    held_pos_ofs_ned_m.xy() = held_pos_ofs_ned_m.xy() + (pos_ofs_ned_m.xy() - held_pos_ofs_ned_m.xy()) * alpha;
+                    held_pos_ofs_ned_m.z = pos_ofs_ned_m.z; // keep Z following normally (or also deadband if desired)
+                }
+            }
+        }
+
+        // If holding, override the target fed into pos_control
+        Vector3f use_pos_ofs_ned_m = pos_ofs_ned_m;
+        Vector3f use_vel_ofs_ned_ms = vel_ofs_ned_ms;
+        Vector3f use_accel_ofs_ned_mss = accel_ofs_ned_mss;
+
+        if (hold_active) {
+            use_pos_ofs_ned_m = held_pos_ofs_ned_m;
+            use_vel_ofs_ned_ms.zero();
+            use_accel_ofs_ned_mss.zero();
+        }
+
         // XY pos/vel/accel in NE, cm-based
-        Vector2p pos_ne_cm;            // NON-const lvalue (AC_PosControl may modify)
-        pos_ne_cm.x = (postype_t)(pos_ofs_ned_m.x * 100.0f);
-        pos_ne_cm.y = (postype_t)(pos_ofs_ned_m.y * 100.0f);
+        Vector2p pos_ne_cm;
+        pos_ne_cm.x = (postype_t)(use_pos_ofs_ned_m.x * 100.0f);
+        pos_ne_cm.y = (postype_t)(use_pos_ofs_ned_m.y * 100.0f);
 
-        Vector2f vel_ne_cms;           // NON-const lvalue (AC_PosControl may modify)
-        vel_ne_cms.x = vel_ofs_ned_ms.x * 100.0f;
-        vel_ne_cms.y = vel_ofs_ned_ms.y * 100.0f;
+        Vector2f vel_ne_cms;
+        vel_ne_cms.x = use_vel_ofs_ned_ms.x * 100.0f;
+        vel_ne_cms.y = use_vel_ofs_ned_ms.y * 100.0f;
 
-        const Vector2f accel_ne_cmss(accel_ofs_ned_mss.x * 100.0f,
-                                     accel_ofs_ned_mss.y * 100.0f);
+        const Vector2f accel_ne_cmss(use_accel_ofs_ned_mss.x * 100.0f,
+                                     use_accel_ofs_ned_mss.y * 100.0f);
 
         // Z pos/vel/accel in Up, cm-based
-        float pos_up_cm   = (-pos_ofs_ned_m.z) * 100.0f;       // NON-const lvalue
-        float vel_up_cms  = (-vel_ofs_ned_ms.z) * 100.0f;      // NON-const lvalue
-        const float accel_up_cmss = (-accel_ofs_ned_mss.z) * 100.0f;
+        float pos_up_cm   = (-use_pos_ofs_ned_m.z) * 100.0f;
+        float vel_up_cms  = (-use_vel_ofs_ned_ms.z) * 100.0f;
+        const float accel_up_cmss = (-use_accel_ofs_ned_mss.z) * 100.0f;
 
         // Feed into AC_PosControl
         pos_control->input_pos_vel_accel_xy(pos_ne_cm, vel_ne_cms, accel_ne_cmss, false);
@@ -144,6 +198,12 @@ void ModeFollow::run()
         if (do_dbg) {
             const auto pos_tgt_cm = pos_control->get_pos_target_cm();   // NEU cm
             const uint8_t yaw_behave = (uint8_t)g2.follow.get_yaw_behave();
+
+            gcs().send_text(MAV_SEVERITY_INFO,
+                "FOLL hold=%u leadSpd=%.2f err=%.2f",
+                (unsigned)hold_active,
+                (double)lead_speed,
+                (double)(pos_ofs_ned_m.xy() - held_pos_ofs_ned_m.xy()).length());
 
             gcs().send_text(
                 MAV_SEVERITY_INFO,
@@ -230,7 +290,6 @@ void ModeFollow::run()
             const float pilot_yaw_rate_cds = get_pilot_desired_yaw_rate();   // cd/s
             yaw_rate_rads = radians(pilot_yaw_rate_cds * 0.01f);                 // -> rad/s
             break;
-                break;
         }
 
     } else {

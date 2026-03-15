@@ -1869,7 +1869,7 @@ public:
 
     bool requires_position() const { return true; }
     bool has_manual_throttle() const override { return false; }
-    bool allows_arming(AP_Arming::Method method) const override { return false; }
+    bool allows_arming(AP_Arming::Method method) const override { return true; }
     bool is_autopilot() const override { return true; }
 
     // Return true if this mode is enabled, used by MAVLink available modes

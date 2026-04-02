@@ -309,17 +309,23 @@ void AP_Follow::update_estimates()
         _ofs_estimate_vel_ned_ms = _estimate_vel_ned_ms;
         _ofs_estimate_accel_ned_mss = _estimate_accel_ned_mss;
     } else {
-        // offsets are in FRD frame: rotate by heading
+        // offsets are in FRD frame: rotate by heading into NED
         offset_m.xy().rotate(_estimate_heading_rad);
+
         _ofs_estimate_pos_ned_m = _estimate_pos_ned_m + offset_m.topostype();
         _ofs_estimate_vel_ned_ms = _estimate_vel_ned_ms;
         _ofs_estimate_accel_ned_mss = _estimate_accel_ned_mss;
-        // with kinematic shaping of heading we can improve our offset velocity and acceleration of the offset
+
         if (valid_kinematic_params) {
-            Vector3f offset_cross = offset_m.cross(Vector3f{0.0, 0.0, 1.0});
-            float offset_length_m = offset_m.length();
-            _ofs_estimate_vel_ned_ms += offset_cross * offset_length_m * _estimate_heading_rate_rads;
-            _ofs_estimate_accel_ned_mss += offset_cross * offset_length_m * _estimate_heading_accel_radss;
+            const Vector3f r{offset_m.x, offset_m.y, offset_m.z};
+            const Vector3f omega{0.0f, 0.0f, _estimate_heading_rate_rads};
+            const Vector3f alpha{0.0f, 0.0f, _estimate_heading_accel_radss};
+
+            // Correct rotating-offset kinematics in NED:
+            // v = omega x r
+            // a = alpha x r + omega x (omega x r)
+            _ofs_estimate_vel_ned_ms += omega.cross(r);
+            _ofs_estimate_accel_ned_mss += alpha.cross(r) + omega.cross(omega.cross(r));
         }
     }
 
